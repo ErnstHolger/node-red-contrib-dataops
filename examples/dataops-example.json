@@ -1,0 +1,108 @@
+[
+    {
+        "id": "cache-1",
+        "type": "dataops-cache",
+        "name": "Main Cache",
+        "maxEntries": 1000,
+        "ttl": 0
+    },
+    {
+        "id": "inject-temp",
+        "type": "inject",
+        "name": "Inject Temperature",
+        "topic": "sensor/temperature",
+        "payload": "{\"device_id\":\"D1\",\"value\":25.5,\"unit\":\"C\"}",
+        "payloadType": "json",
+        "repeat": "5",
+        "crontab": "",
+        "once": false,
+        "wires": [["in-temp"]]
+    },
+    {
+        "id": "in-temp",
+        "type": "dataops-in",
+        "name": "Cache Temp",
+        "cache": "cache-1",
+        "keyField": "topic",
+        "wires": [["debug-temp"]]
+    },
+    {
+        "id": "debug-temp",
+        "type": "debug",
+        "name": "Temp Debug",
+        "active": true,
+        "wires": []
+    },
+    {
+        "id": "inject-hum",
+        "type": "inject",
+        "name": "Inject Humidity",
+        "topic": "sensor/humidity",
+        "payload": "{\"device_id\":\"D1\",\"value\":60.2,\"unit\":\"%\"}",
+        "payloadType": "json",
+        "repeat": "8",
+        "crontab": "",
+        "once": false,
+        "wires": [["in-hum"]]
+    },
+    {
+        "id": "in-hum",
+        "type": "dataops-in",
+        "name": "Cache Hum",
+        "cache": "cache-1",
+        "keyField": "topic",
+        "wires": []
+    },
+    {
+        "id": "combine-1",
+        "type": "dataops-combine",
+        "name": "Combine Sensors",
+        "cache": "cache-1",
+        "inputMappings": [
+            { "name": "temperature", "topic": "sensor/temperature" },
+            { "name": "humidity", "topic": "sensor/humidity" }
+        ],
+        "joinKey": "device_id",
+        "windowMs": 5000,
+        "outputTopic": "sensors/combined",
+        "table": "sensor_readings",
+        "triggerMode": "event",
+        "intervalMs": 60000,
+        "cronExpr": "",
+        "wires": [["debug-combined"], []]
+    },
+    {
+        "id": "debug-combined",
+        "type": "debug",
+        "name": "Combined Debug",
+        "active": true,
+        "wires": [["split-1"]]
+    },
+    {
+        "id": "split-1",
+        "type": "dataops-split",
+        "name": "Split Sensors",
+        "splitMode": "fields",
+        "fieldGroups": [
+            { "fields": "temperature", "topic": "sensors/temp", "table": "temperature_readings" },
+            { "fields": "humidity", "topic": "sensors/humidity", "table": "humidity_readings" }
+        ],
+        "arrayPath": "payload",
+        "includeContext": "",
+        "wires": [["debug-split1"], ["debug-split2"], [], []]
+    },
+    {
+        "id": "debug-split1",
+        "type": "debug",
+        "name": "Split Temp",
+        "active": true,
+        "wires": []
+    },
+    {
+        "id": "debug-split2",
+        "type": "debug",
+        "name": "Split Hum",
+        "active": true,
+        "wires": []
+    }
+]

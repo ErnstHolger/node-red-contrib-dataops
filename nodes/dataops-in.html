@@ -1,0 +1,50 @@
+<script type="text/javascript">
+    RED.nodes.registerType('dataops-in', {
+        category: 'data ops',
+        color: '#4A7C59',
+        defaults: {
+            name: { value: "" },
+            cache: { value: "", type: "dataops-cache", required: true },
+            keyField: { value: "topic" }
+        },
+        inputs: 1,
+        outputs: 1,
+        icon: "font-awesome/fa-arrow-circle-right",
+        label: function() {
+            return this.name || "dataops in";
+        },
+        paletteLabel: "dataops in"
+    });
+</script>
+
+<script type="text/html" data-template-name="dataops-in">
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+        <input type="text" id="node-input-name" placeholder="Name">
+    </div>
+    <div class="form-row">
+        <label for="node-input-cache"><i class="fa fa-database"></i> Cache</label>
+        <input type="text" id="node-input-cache">
+    </div>
+    <div class="form-row">
+        <label for="node-input-keyField"><i class="fa fa-key"></i> Key Field</label>
+        <input type="text" id="node-input-keyField" placeholder="topic">
+        <div class="form-tips">Message property used as cache key (default: <code>msg.topic</code>).</div>
+    </div>
+</script>
+
+<script type="text/html" data-help-name="dataops-in">
+    <h3>Summary</h3>
+    <p>Pushes incoming messages into the DataOps cache. The full <code>msg.payload</code> is stored keyed by the configured field.</p>
+
+    <h3>Properties</h3>
+    <dl class="message-properties">
+        <dt>Cache</dt>
+        <dd>The dataops-cache config node to use.</dd>
+        <dt>Key Field</dt>
+        <dd>Message property used as the cache key. Default: <code>msg.topic</code>.</dd>
+    </dl>
+
+    <h3>Output</h3>
+    <p>The original message is passed through unchanged.</p>
+</script>

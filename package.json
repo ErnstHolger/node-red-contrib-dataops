@@ -1,0 +1,49 @@
+{
+  "name": "node-red-contrib-dataops",
+  "version": "1.0.0",
+  "description": "Node-RED nodes for data operations — cache, combine, and split messages for database workflows",
+  "author": {
+    "name": "Holger Amort"
+  },
+  "keywords": [
+    "node-red",
+    "dataops",
+    "cache",
+    "combine",
+    "split",
+    "join",
+    "database",
+    "streaming"
+  ],
+  "license": "SEE LICENSE IN LICENSE",
+  "homepage": "https://github.com/ErnstHolger/node-red-contrib-dataops#readme",
+  "bugs": {
+    "url": "https://github.com/ErnstHolger/node-red-contrib-dataops/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ErnstHolger/node-red-contrib-dataops.git"
+  },
+  "node-red": {
+    "version": ">=2.0.0",
+    "nodes": {
+      "dataops-cache": "nodes/dataops-cache.js",
+      "dataops-in": "nodes/dataops-in.js",
+      "dataops-combine": "nodes/dataops-combine.js",
+      "dataops-split": "nodes/dataops-split.js"
+    }
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "deploy": "npm link",
+    "deploy:patch": "npm version patch --no-git-tag-version && npm link",
+    "deploy:minor": "npm version minor --no-git-tag-version && npm link",
+    "deploy:major": "npm version major --no-git-tag-version && npm link",
+    "publish:dry": "npm publish --dry-run",
+    "publish:patch": "npm version patch && npm publish",
+    "publish:minor": "npm version minor && npm publish",
+    "publish:major": "npm version major && npm publish"
+  }
+}
