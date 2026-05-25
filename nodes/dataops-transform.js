@@ -110,11 +110,13 @@ module.exports = function(RED) {
 
                 if (rawSpec && typeof rawSpec === 'object' && !Array.isArray(rawSpec)) {
                     const c = getOrCompile(topic, rawSpec);
-                    const [rawValue, timestamp, quality] = await Promise.all([
+                    const [rawValue, ts, q] = await Promise.all([
                         c.value     ? evalExpr(c.value, msg)     : Promise.resolve(msg.payload),
                         c.timestamp ? evalExpr(c.timestamp, msg) : Promise.resolve(Date.now()),
                         c.quality   ? evalExpr(c.quality, msg)   : Promise.resolve(true)
                     ]);
+                    const timestamp = (ts !== undefined && ts !== null) ? ts : Date.now();
+                    const quality   = (q  !== undefined && q  !== null) ? q  : true;
                     const declaredType = (typeof rawSpec.type === 'string' && rawSpec.type) ? rawSpec.type : null;
                     const value = declaredType ? coerce(rawValue, declaredType) : rawValue;
                     const type  = declaredType || inferType(rawValue);
