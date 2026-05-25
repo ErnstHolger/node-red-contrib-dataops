@@ -14,11 +14,16 @@ module.exports = function(RED) {
         RED.nodes.createNode(this, config);
         const node = this;
 
-        node.name = config.name || 'DataOps Cache';
+        node.name = config.name || '';
         node.maxEntries = parseInt(config.maxEntries) || 10000;
         node.ttl = parseInt(config.ttl) || 0;
 
-        const contextKey = `dataopsCache_${node.name.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+        // Context key = the configured name as the user typed it (with light
+        // sanitization for valid dot-notation access). Falls back to node.id
+        // when blank so an unnamed cache still has a stable, unique location.
+        const sanitize = (s) => String(s).replace(/[^a-zA-Z0-9_]/g, '_');
+        const contextKey = sanitize(node.name || node.id);
+        const legacyContextKey = `dataopsCache_${sanitize(node.name || 'DataOps Cache')}`;
         const globalContext = node.context().global;
 
         const instanceKey = node.id;
@@ -39,9 +44,19 @@ module.exports = function(RED) {
 
         const cache = instance.cache;
 
-        // Restore from context if cache is empty (e.g. after restart)
+        // Restore from context if cache is empty (e.g. after restart).
+        // Also migrates data from the pre-rename legacy key (dataopsCache_*).
         if (cache.size === 0) {
-            const stored = globalContext.get(contextKey);
+            let stored = globalContext.get(contextKey);
+            if (!stored && legacyContextKey !== contextKey) {
+                const legacy = globalContext.get(legacyContextKey);
+                if (legacy && typeof legacy === 'object' && Object.keys(legacy).length > 0) {
+                    stored = legacy;
+                    globalContext.set(contextKey, legacy);
+                    globalContext.set(legacyContextKey, undefined);
+                    RED.log.info(`[dataops-cache] migrated ${Object.keys(legacy).length} entries from global.${legacyContextKey} → global.${contextKey}`);
+                }
+            }
             if (stored && typeof stored === 'object') {
                 for (const [key, entry] of Object.entries(stored)) {
                     cache.set(key, entry);

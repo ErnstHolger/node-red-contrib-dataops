@@ -1,0 +1,195 @@
+[
+    {
+        "id": "cache-ai",
+        "type": "dataops-cache",
+        "name": "AI Pipeline Cache",
+        "maxEntries": 10000,
+        "ttl": 0
+    },
+    {
+        "id": "claude-api-config",
+        "type": "dataops-claude-api",
+        "name": "My Claude API"
+    },
+    {
+        "id": "inject-temp",
+        "type": "inject",
+        "name": "Temperature Sensor (OPC UA)",
+        "topic": "plant/HWS/Denis/temperature",
+        "payload": "{\"value\":{\"value\":25.4,\"dataType\":\"Double\"},\"sourceTimestamp\":\"2026-05-25T12:00:00.000Z\",\"statusCode\":0}",
+        "payloadType": "json",
+        "repeat": "10",
+        "crontab": "",
+        "once": false,
+        "wires": [["in-temp"]]
+    },
+    {
+        "id": "in-temp",
+        "type": "dataops-in",
+        "name": "Cache Temperature",
+        "cache": "cache-ai",
+        "keyField": "topic",
+        "wires": [["debug-temp-raw"]]
+    },
+    {
+        "id": "debug-temp-raw",
+        "type": "debug",
+        "name": "Temp (raw)",
+        "active": false,
+        "wires": []
+    },
+    {
+        "id": "inject-hum",
+        "type": "inject",
+        "name": "Humidity Sensor (OPC UA)",
+        "topic": "plant/HWS/Denis/humidity",
+        "payload": "{\"value\":{\"value\":60.2,\"dataType\":\"Double\"},\"sourceTimestamp\":\"2026-05-25T12:00:00.000Z\",\"statusCode\":0}",
+        "payloadType": "json",
+        "repeat": "12",
+        "crontab": "",
+        "once": false,
+        "wires": [["in-hum"]]
+    },
+    {
+        "id": "in-hum",
+        "type": "dataops-in",
+        "name": "Cache Humidity",
+        "cache": "cache-ai",
+        "keyField": "topic",
+        "wires": [["debug-hum-raw"]]
+    },
+    {
+        "id": "debug-hum-raw",
+        "type": "debug",
+        "name": "Hum (raw)",
+        "active": false,
+        "wires": []
+    },
+    {
+        "id": "inject-pressure",
+        "type": "inject",
+        "name": "Pressure Sensor (Kepware)",
+        "topic": "plant/HWS/Denis/pressure",
+        "payload": "{\"value\":1013.2,\"timestamp\":1716636000000,\"quality\":true}",
+        "payloadType": "json",
+        "repeat": "15",
+        "crontab": "",
+        "once": false,
+        "wires": [["in-pressure"]]
+    },
+    {
+        "id": "in-pressure",
+        "type": "dataops-in",
+        "name": "Cache Pressure",
+        "cache": "cache-ai",
+        "keyField": "topic",
+        "wires": []
+    },
+    {
+        "id": "inject-alarm",
+        "type": "inject",
+        "name": "Alarm Status (Sparkplug)",
+        "topic": "plant/HWS/Denis/alarm",
+        "payload": "{\"v\":false,\"ts\":1716636000000}",
+        "payloadType": "json",
+        "repeat": "20",
+        "crontab": "",
+        "once": false,
+        "wires": [["in-alarm"]]
+    },
+    {
+        "id": "in-alarm",
+        "type": "dataops-in",
+        "name": "Cache Alarm",
+        "cache": "cache-ai",
+        "keyField": "topic",
+        "wires": []
+    },
+    {
+        "id": "inject-gen-specs",
+        "type": "inject",
+        "name": "Generate Specs",
+        "topic": "dataops/generate-specs",
+        "payload": "",
+        "payloadType": "str",
+        "repeat": "",
+        "crontab": "",
+        "once": true,
+        "wires": [["claude-node"]]
+    },
+    {
+        "id": "claude-node",
+        "type": "dataops-claude",
+        "name": "Generate Normalization Specs",
+        "cache": "cache-ai",
+        "apiConfig": "claude-api-config",
+        "systemPrompt": "",
+        "specContextScope": "global",
+        "specContextKey": "dataopsSpecs",
+        "maxSampleRows": 250,
+        "dbPath": "",
+        "wires": [["debug-specs"], ["debug-claude-error"]]
+    },
+    {
+        "id": "debug-specs",
+        "type": "debug",
+        "name": "Generated Specs",
+        "active": true,
+        "wires": []
+    },
+    {
+        "id": "debug-claude-error",
+        "type": "debug",
+        "name": "Claude Errors",
+        "active": true,
+        "wires": []
+    },
+    {
+        "id": "inject-live-data",
+        "type": "inject",
+        "name": "Live Data (simulated stream)",
+        "topic": "plant/HWS/Denis/temperature",
+        "payload": "{\"value\":{\"value\":26.1,\"dataType\":\"Double\"},\"sourceTimestamp\":\"2026-05-25T12:05:00.000Z\",\"statusCode\":0}",
+        "payloadType": "json",
+        "repeat": "5",
+        "crontab": "",
+        "once": false,
+        "wires": [["transform-node"]]
+    },
+    {
+        "id": "transform-node",
+        "type": "dataops-transform",
+        "name": "Apply Normalization Specs",
+        "specScope": "global",
+        "specKey": "dataopsSpecs",
+        "keyField": "topic",
+        "fallbackMode": "passthrough",
+        "wires": [["combine-node"], ["debug-transform-error"]]
+    },
+    {
+        "id": "debug-transform-error",
+        "type": "debug",
+        "name": "Transform Errors",
+        "active": true,
+        "wires": []
+    },
+    {
+        "id": "combine-node",
+        "type": "dataops-combine",
+        "name": "Combine Normalized Records",
+        "triggerMode": "event",
+        "intervalMs": 1000,
+        "expectedNames": "",
+        "outputTopic": "plant/HWS/Denis/combined",
+        "tsField": "ts",
+        "includeQuality": true,
+        "wires": [["debug-combined"], []]
+    },
+    {
+        "id": "debug-combined",
+        "type": "debug",
+        "name": "Combined Output",
+        "active": true,
+        "wires": []
+    }
+]

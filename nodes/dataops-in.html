@@ -1,7 +1,11 @@
+<style>
+    .dataops-white-text { fill: #ffffff !important; }
+    .red-ui-palette-node[data-palette-type="dataops-in"] .red-ui-palette-label { color: #ffffff !important; }
+</style>
 <script type="text/javascript">
     RED.nodes.registerType('dataops-in', {
         category: 'data ops',
-        color: '#4A7C59',
+        color: '#054E4E',
         defaults: {
             name: { value: "" },
             cache: { value: "", type: "dataops-cache", required: true },
@@ -11,9 +15,15 @@
         outputs: 1,
         icon: "font-awesome/fa-arrow-circle-right",
         label: function() {
-            return this.name || "dataops in";
+            if (this.name) return this.name;
+            if (this.cache) {
+                var c = RED.nodes.node(this.cache);
+                if (c && c.name) return c.name;
+            }
+            return "cache";
         },
-        paletteLabel: "dataops in"
+        labelStyle: function() { return (this.name ? "node_label_italic" : "") + " dataops-white-text"; },
+        paletteLabel: "cache"
     });
 </script>
 

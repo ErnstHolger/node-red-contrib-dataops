@@ -1,0 +1,93 @@
+[
+    {
+        "id": "inject-opcua",
+        "type": "inject",
+        "name": "OPC UA Variant (payload.value.value)",
+        "topic": "plant/Area1/Temperature",
+        "payload": "{\"value\":{\"value\":72.8,\"dataType\":\"Double\"},\"sourceTimestamp\":\"2026-05-25T12:00:00.000Z\",\"statusCode\":0}",
+        "payloadType": "json",
+        "repeat": "10",
+        "crontab": "",
+        "once": false,
+        "wires": [["transform-heuristic"]]
+    },
+    {
+        "id": "inject-kepware",
+        "type": "inject",
+        "name": "Kepware (payload.value)",
+        "topic": "plant/Area1/Pressure",
+        "payload": "{\"value\":1013.2,\"timestamp\":1716636000000,\"quality\":true}",
+        "payloadType": "json",
+        "repeat": "12",
+        "crontab": "",
+        "once": false,
+        "wires": [["transform-heuristic"]]
+    },
+    {
+        "id": "inject-sparkplug",
+        "type": "inject",
+        "name": "Sparkplug B (payload.v)",
+        "topic": "plant/Area1/Humidity",
+        "payload": "{\"v\":55.3,\"ts\":1716636000000}",
+        "payloadType": "json",
+        "repeat": "15",
+        "crontab": "",
+        "once": false,
+        "wires": [["transform-heuristic"]]
+    },
+    {
+        "id": "inject-scalar",
+        "type": "inject",
+        "name": "Scalar Payload (bare value)",
+        "topic": "plant/Area1/Status",
+        "payload": "true",
+        "payloadType": "bool",
+        "repeat": "18",
+        "crontab": "",
+        "once": false,
+        "wires": [["transform-heuristic"]]
+    },
+    {
+        "id": "transform-heuristic",
+        "type": "dataops-transform",
+        "name": "Heuristic Normalizer",
+        "specScope": "global",
+        "specKey": "dataopsSpecs",
+        "keyField": "topic",
+        "fallbackMode": "heuristic",
+        "wires": [["combine-heuristic", "debug-individual"], ["debug-transform-err"]]
+    },
+    {
+        "id": "debug-transform-err",
+        "type": "debug",
+        "name": "Transform Errors",
+        "active": true,
+        "wires": []
+    },
+    {
+        "id": "combine-heuristic",
+        "type": "dataops-combine",
+        "name": "Combine All Sensors",
+        "triggerMode": "interval",
+        "intervalMs": 2000,
+        "expectedNames": "",
+        "outputTopic": "plant/Area1/combined",
+        "tsField": "ts",
+        "includeQuality": false,
+        "wires": [["debug-combined"], []]
+    },
+    {
+        "id": "debug-combined",
+        "type": "debug",
+        "name": "Combined Output",
+        "active": true,
+        "wires": []
+    },
+    {
+        "id": "debug-individual",
+        "type": "debug",
+        "name": "Normalized Records",
+        "active": true,
+        "wires": []
+    }
+]

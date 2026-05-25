@@ -1,118 +1,33 @@
+<style>
+    .dataops-white-text { fill: #ffffff !important; }
+    .red-ui-palette-node[data-palette-type="dataops-combine"] .red-ui-palette-label { color: #ffffff !important; }
+</style>
 <script type="text/javascript">
     RED.nodes.registerType('dataops-combine', {
         category: 'data ops',
-        color: '#4A7C59',
+        color: '#054E4E',
         defaults: {
-            name: { value: "" },
-            cache: { value: "", type: "dataops-cache", required: true },
-            inputMappings: { value: [] },
-            joinKey: { value: "" },
-            windowMs: { value: 0, validate: RED.validators.number() },
-            outputTopic: { value: "dataops/combined" },
-            table: { value: "" },
-            triggerMode: { value: "event" },
-            intervalMs: { value: 60000, validate: RED.validators.number() },
-            cronExpr: { value: "" }
+            name:           { value: "" },
+            triggerMode:    { value: "event", required: true },
+            intervalMs:     { value: 1000, validate: RED.validators.number() },
+            expectedNames:  { value: "" },
+            outputTopic:    { value: "dataops/combined" },
+            tsField:        { value: "ts" },
+            includeQuality: { value: false }
         },
         inputs: 1,
         outputs: 2,
-        outputLabels: ["combined", "status"],
+        outputLabels: ["combined", "error"],
         icon: "font-awesome/fa-object-group",
-        label: function() {
-            return this.name || "dataops combine";
-        },
-        paletteLabel: "dataops combine",
+        label: function() { return this.name || "combine"; },
+        labelStyle: function() { return (this.name ? "node_label_italic" : "") + " dataops-white-text"; },
+        paletteLabel: "combine",
         oneditprepare: function() {
-            const node = this;
-            let cachedKeys = [];
-
-            function fetchKeys() {
-                const cacheId = $("#node-input-cache").val();
-                if (cacheId) {
-                    $.getJSON("dataops-cache/" + cacheId + "/keys", function(keys) {
-                        cachedKeys = keys || [];
-                        $(".input-topic").each(function() {
-                            $(this).autocomplete("option", "source", cachedKeys);
-                        });
-                    });
-                }
-            }
-
-            $("#node-input-cache").on("change", fetchKeys);
-            setTimeout(fetchKeys, 100);
-
-            // Toggle interval/cron visibility
-            function updateTriggerUI() {
-                const mode = $("#node-input-triggerMode").val();
-                $(".trigger-interval-row").toggle(mode === "interval");
-                $(".trigger-cron-row").toggle(mode === "interval");
-            }
-            $("#node-input-triggerMode").on("change", updateTriggerUI);
-            setTimeout(updateTriggerUI, 100);
-
-            // Input mappings editable list
-            const inputList = $("#node-input-inputMappings-list").css({
-                'min-height': '120px',
-                'min-width': '450px'
-            }).editableList({
-                addItem: function(container, i, data) {
-                    const row = $('<div/>', { style: "display:flex; align-items:center; gap:5px;" }).appendTo(container);
-
-                    $('<input/>', {
-                        type: "text",
-                        placeholder: "field name",
-                        class: "input-name"
-                    })
-                    .css({ width: "25%", flex: "0 0 auto" })
-                    .val(data.name || "")
-                    .appendTo(row);
-
-                    $('<span/>', { style: "flex: 0 0 auto;" }).text(" ← ").appendTo(row);
-
-                    const topicInput = $('<input/>', {
-                        type: "text",
-                        placeholder: "cache key",
-                        class: "input-topic"
-                    })
-                    .css({ flex: "1 1 auto" })
-                    .val(data.topic || "")
-                    .appendTo(row);
-
-                    topicInput.autocomplete({
-                        source: cachedKeys,
-                        minLength: 0,
-                        delay: 0
-                    }).on("focus", function() {
-                        if (!$(this).val()) {
-                            $(this).autocomplete("search", "");
-                        }
-                    });
-                },
-                removable: true,
-                sortable: true,
-                addButton: true
-            });
-
-            if (node.inputMappings && node.inputMappings.length > 0) {
-                node.inputMappings.forEach(function(m) {
-                    inputList.editableList('addItem', m);
-                });
-            } else {
-                inputList.editableList('addItem', { name: 'sensor_a', topic: '' });
-                inputList.editableList('addItem', { name: 'sensor_b', topic: '' });
-            }
-        },
-        oneditsave: function() {
-            const node = this;
-            node.inputMappings = [];
-
-            $("#node-input-inputMappings-list").editableList('items').each(function() {
-                const name = $(this).find(".input-name").val().trim();
-                const topic = $(this).find(".input-topic").val().trim();
-                if (name && topic) {
-                    node.inputMappings.push({ name: name, topic: topic });
-                }
-            });
+            $('#node-input-triggerMode').on('change', function() {
+                var mode = $(this).val();
+                $('.row-interval').toggle(mode === 'interval');
+                $('.row-expected').toggle(mode === 'quorum');
+            }).trigger('change');
         }
     });
 </script>
@@ -123,93 +38,79 @@
         <input type="text" id="node-input-name" placeholder="Name">
     </div>
     <div class="form-row">
-        <label for="node-input-cache"><i class="fa fa-database"></i> Cache</label>
-        <input type="text" id="node-input-cache">
+        <label for="node-input-triggerMode"><i class="fa fa-bolt"></i> Trigger</label>
+        <select id="node-input-triggerMode" style="width:70%;">
+            <option value="event">event — emit on every input (always-current)</option>
+            <option value="interval">interval — emit every N ms</option>
+            <option value="quorum">quorum — emit when all expected names arrived, then reset</option>
+        </select>
+    </div>
+    <div class="form-row row-interval">
+        <label for="node-input-intervalMs"><i class="fa fa-clock-o"></i> Interval (ms)</label>
+        <input type="number" id="node-input-intervalMs" placeholder="1000" min="50">
+    </div>
+    <div class="form-row row-expected">
+        <label for="node-input-expectedNames"><i class="fa fa-list"></i> Expected Names</label>
+        <input type="text" id="node-input-expectedNames" placeholder="T, H, P, alarm">
+        <div class="form-tips">Comma-separated list. Quorum emits once all listed names have appeared in the buffer.</div>
     </div>
     <div class="form-row">
-        <label style="width:100%;"><i class="fa fa-sign-in"></i> Input Mappings</label>
-        <ol id="node-input-inputMappings-list"></ol>
-        <div class="form-tips">Map output field names to cache keys. Each field receives the cached payload for that key.</div>
-    </div>
-    <div class="form-row">
-        <label for="node-input-joinKey"><i class="fa fa-link"></i> Join Key</label>
-        <input type="text" id="node-input-joinKey" placeholder="e.g. id or order_id">
-        <div class="form-tips">Field path within each payload that must match for messages to be combined. Leave empty to skip key matching.</div>
-    </div>
-    <div class="form-row">
-        <label for="node-input-windowMs"><i class="fa fa-clock-o"></i> Time Window (ms)</label>
-        <input type="number" id="node-input-windowMs" placeholder="0">
-        <div class="form-tips">Max time difference between oldest and newest message. 0 = no window constraint.</div>
-    </div>
-    <div class="form-row">
-        <label for="node-input-outputTopic"><i class="fa fa-bookmark"></i> Output Topic</label>
+        <label for="node-input-outputTopic"><i class="fa fa-share"></i> Output Topic</label>
         <input type="text" id="node-input-outputTopic" placeholder="dataops/combined">
     </div>
     <div class="form-row">
-        <label for="node-input-table"><i class="fa fa-table"></i> Table</label>
-        <input type="text" id="node-input-table" placeholder="e.g. measurements_wide">
-        <div class="form-tips">Sets <code>msg._table</code> on the output message for database routing.</div>
+        <label for="node-input-tsField"><i class="fa fa-clock-o"></i> Timestamp Key</label>
+        <input type="text" id="node-input-tsField" placeholder="ts">
+        <div class="form-tips">Output dict key for the latest input timestamp. Default <code>ts</code>.</div>
     </div>
     <div class="form-row">
-        <label for="node-input-triggerMode"><i class="fa fa-bolt"></i> Trigger Mode</label>
-        <select id="node-input-triggerMode" style="width:70%;">
-            <option value="event">Event — on cache update</option>
-            <option value="interval">Interval — regularly</option>
-            <option value="external">External — on input message</option>
-        </select>
-    </div>
-    <div class="form-row trigger-interval-row" style="display:none;">
-        <label for="node-input-intervalMs"><i class="fa fa-repeat"></i> Interval (ms)</label>
-        <input type="number" id="node-input-intervalMs" placeholder="60000">
-    </div>
-    <div class="form-row trigger-interval-row" style="display:none;">
-        <label for="node-input-cronExpr"><i class="fa fa-calendar"></i> Cron Expression</label>
-        <input type="text" id="node-input-cronExpr" placeholder="e.g. */5 * * * *">
-        <div class="form-tips">If set, uses cron instead of fixed interval. Overrides interval value.</div>
+        <label style="width:auto;font-weight:normal;">
+            <input type="checkbox" id="node-input-includeQuality" style="width:auto;vertical-align:top;">
+            Include quality fields as <code>&lt;name&gt;_q</code> in output
+        </label>
     </div>
 </script>
 
 <script type="text/html" data-help-name="dataops-combine">
     <h3>Summary</h3>
-    <p>Combines multiple cached messages into one wide message using key-based joining within a time window.</p>
+    <p>Collects narrow normalized records (one per <code>name</code>) and emits a single wide flat dictionary on output 1.</p>
 
-    <h3>Properties</h3>
+    <h3>Input</h3>
+    <p>Each input message must carry the canonical record shape:</p>
+    <pre>msg.payload = { name, type, timestamp, value, quality }</pre>
+    <p>(This is what <code>dataops-transform</code> and <code>dataops-split</code> produce.) The node buffers the latest record per <code>name</code>.</p>
+
+    <h3>Trigger Modes</h3>
     <dl class="message-properties">
-        <dt>Input Mappings</dt>
-        <dd>Map output field names to cache keys. Each field receives the full cached payload for that key.</dd>
-        <dt>Join Key</dt>
-        <dd>Field path within each payload that must match across all inputs. E.g., if all payloads have an <code>order_id</code> field, set this to <code>order_id</code>.</dd>
-        <dt>Time Window</dt>
-        <dd>Maximum allowed time difference (ms) between the oldest and newest cached message. 0 = no constraint.</dd>
-        <dt>Table</dt>
-        <dd>Sets <code>msg._table</code> on output messages — use this to route to a specific database table.</dd>
-        <dt>Trigger Mode</dt>
-        <dd>
-            <ul>
-                <li><b>Event</b>: Fire whenever any mapped cache entry updates.</li>
-                <li><b>Interval</b>: Fire on a regular interval using latest cached values.</li>
-                <li><b>External</b>: Fire only when a message arrives at the input port.</li>
-            </ul>
-        </dd>
+        <dt>event</dt>
+        <dd>Emit on every input — output is always the freshest snapshot of all names seen so far.</dd>
+        <dt>interval</dt>
+        <dd>Emit every N milliseconds (default 1000). Useful for downstream sinks that want a steady cadence regardless of input rate.</dd>
+        <dt>quorum</dt>
+        <dd>Emit once all <i>expected names</i> have been seen, then clear the buffer. Useful when assembling a complete record from synchronized sources.</dd>
     </dl>
+    <p>A message with <code>msg.cmd = "emit"</code> always forces an emit, regardless of mode.</p>
+
+    <h3>Example Output</h3>
+    <pre>{
+  "topic": "dataops/combined",
+  "payload": {
+    "T":     25.4,
+    "H":     60.2,
+    "P":     1013,
+    "alarm": false,
+    "ts":    1716636002000
+  },
+  "_names":   ["T", "H", "P", "alarm"],
+  "_trigger": "event"
+}</pre>
+    <p><code>ts</code> is the latest input timestamp across all buffered records (rename via <i>Timestamp Key</i>).</p>
 
     <h3>Outputs</h3>
-    <ol>
-        <li><b>Combined</b>: The merged message with <code>msg.payload</code> containing all mapped fields.</li>
-        <li><b>Status</b>: Join status info and errors.</li>
-    </ol>
-
-    <h3>Example</h3>
-    <p>If you have two cache entries:</p>
-    <pre>
-sensor/temp → { device_id: "D1", value: 25.5 }
-sensor/hum  → { device_id: "D1", value: 60.2 }
-    </pre>
-    <p>With mappings <code>temperature ← sensor/temp</code> and <code>humidity ← sensor/hum</code>, join key <code>device_id</code>, the output payload will be:</p>
-    <pre>
-{
-  temperature: { device_id: "D1", value: 25.5 },
-  humidity:    { device_id: "D1", value: 60.2 }
-}
-    </pre>
+    <dl class="message-properties">
+        <dt>Output 1 — combined</dt>
+        <dd>The flat snapshot dict.</dd>
+        <dt>Output 2 — error</dt>
+        <dd>Malformed input (missing <code>name</code>) or other errors.</dd>
+    </dl>
 </script>

@@ -1,6 +1,6 @@
 # node-red-contrib-dataops
 
-Node-RED nodes for data operations — stream messages into a cache, then **combine** or **split** them for database workflows.
+Node-RED nodes for data operations — stream messages into a cache, normalize them with AI assistance, then **split**, **transform**, or **combine** them for database workflows.
 
 ## Installation
 
@@ -10,65 +10,112 @@ npm install node-red-contrib-dataops
 
 Or via the Node-RED palette manager: search for `node-red-contrib-dataops`.
 
+**Requires Node.js >= 18 and Node-RED >= 2.0.**
+
+### Optional: Claude AI integration
+
+To use the AI-assisted normalization pipeline, install `better-sqlite3` (bundled as a dependency) and configure an Anthropic API key in a `dataops-claude-api` config node.
+
 ## Nodes
 
 ### dataops-cache (config node)
-Central message cache and event hub. Stores full message payloads keyed by topic with pub/sub for reactive updates. Supports LRU eviction and optional TTL expiry.
+Central message cache and event hub. Stores full message payloads keyed by topic with pub/sub for reactive updates. Supports LRU eviction and optional TTL expiry. Exposes HTTP admin endpoints for inspection and clearing.
 
 ### dataops-in
 Pushes incoming messages into the cache. The full `msg.payload` is stored, keyed by the configured field (default: `msg.topic`). Messages pass through unchanged.
 
 ### dataops-combine
-Subscribes to multiple cache keys and combines them into wide messages.
+Collects narrow normalized records and emits wide flat dictionaries.
 
-- **Key-based join**: Messages must share a common field value (e.g., `order_id`)
-- **Time window**: Optional max time span across combined messages
-- **Trigger modes**: Event (on cache update), Interval (fixed rate or cron), External (on input message)
-- Sets `msg._table` for database routing
+- **Input**: `{name, type, timestamp, value, quality}` (canonical record shape)
+- **Trigger modes**: Event (on every input), Interval (fixed-rate snapshots), Quorum (when all expected names arrive)
+- Optional quality fields as `<name>_q` in output
+- Force-emit via `msg.cmd = 'emit'`
 
 ### dataops-split
-Splits wide messages into narrower ones.
+Explodes a wide payload into narrow normalized records.
 
-- **Field extraction**: Define groups of fields, each routed to its own output with topic and table (up to 4 outputs)
-- **Array expansion**: Expand an array into individual messages, optionally including parent context fields
+- **Per-field extraction**: JSON array of `{name, type, path}` definitions
+- **MQTT-style topic filter**: `+` (single segment), `#` (multi-level wildcard)
+- **JSONata expressions** for timestamp and quality
+- **Type coercion**: number, integer, string, boolean, object with aliases
+- Outputs canonical `{name, type, timestamp, value, quality}` records
+
+### dataops-claude-api (config node)
+Stores Anthropic API credentials (encrypted) and model settings shared by `dataops-claude` nodes. Supports custom base URLs for proxies and compatible APIs.
+
+### dataops-claude
+Sends cache samples to Claude for AI-assisted per-topic normalization spec generation.
+
+- Reads all entries from a `dataops-cache`, encodes as TOON for token efficiency
+- Calls the Anthropic Messages API with retry/backoff (3 attempts, 120s timeout)
+- Parses TOON response into a spec dictionary: `{topic: {type, value, timestamp, quality}}`
+- Optionally merges specs into Node-RED context for downstream `dataops-transform` nodes
+- Records all API calls in SQLite history with token usage and duration
+- Emits one message per topic on output 1
+
+### dataops-transform
+Applies per-topic JSONata processing instructions to normalize incoming messages.
+
+- Reads spec dictionary from Node-RED context (populated by `dataops-claude` or manually)
+- Evaluates JSONata expressions for `value`, `timestamp`, `quality` against each message
+- Coerces values to declared types
+- **Heuristic fallback**: walks `payload.value.value` → `payload.value` → `payload.v` → `payload` when no spec exists
+- Caches compiled JSONata expressions for performance
+- Outputs canonical `{name, type, timestamp, value, quality}` records
 
 ## Quick Start
 
 1. Add a **dataops-cache** config node
 2. Feed data in with **dataops-in** (select the cache in its config)
-3. Use **dataops-combine** to merge related messages by key within a time window
-4. Use **dataops-split** to break wide messages apart into per-table outputs
-5. Route outputs to database nodes using `msg._table`
+3. Choose your pipeline:
 
-## Example Flow
-
-See `examples/dataops-example.json` — demonstrates:
-
-- Two inject nodes feeding temperature and humidity into the cache
-- A combine node joining them by `device_id` within a 5-second window
-- A split node breaking the combined result into individual sensor readings
-
-## Common Patterns
-
-### Narrow → Wide → Narrow (Combine then split)
+### Pipeline A: Direct split (wide → narrow)
 ```
-[source A] → dataops-in →┐
-                          ├→ cache → combine → split → [db tables]
-[source B] → dataops-in →┘
+[wide msg source] → dataops-split → [downstream]
 ```
-Collect related data from multiple sources, join into wide records, then fan out to separate database tables.
+Configure fields to extract, use type coercion for clean output.
 
-### Wide → Narrow (Direct split)
+### Pipeline B: AI-assisted normalization (any → canonical)
 ```
-[wide message source] → split → [db tables]
+[sensors] → dataops-in → cache → dataops-claude → context
+                                              ↓
+[messages] → dataops-transform → dataops-combine → [database]
 ```
-Messages already contain all fields but need separating for different tables.
+Claude generates per-topic normalization specs; transform applies them to live data; combine assembles wide records.
 
-### Interval-driven snapshot
+### Pipeline C: Heuristic transform (no API key needed)
 ```
-[sensor] → dataops-in → cache → combine (trigger: interval) → [db]
+[messages] → dataops-transform (heuristic fallback) → dataops-combine → [database]
 ```
-Snapshot latest values periodically regardless of update frequency.
+Uses built-in payload-walking heuristics — works out of the box for OPC UA, Kepware, and Sparkplug B payloads.
+
+## Example Flows
+
+| File | Description |
+|---|---|
+| `examples/dataops-example.json` | Basic pipeline: inject → cache → combine → split |
+| `examples/dataops-claude-pipeline.json` | AI pipeline: cache → claude → transform → combine |
+| `examples/dataops-transform-heuristic.json` | Heuristic-only: transform → combine (no API needed) |
+| `examples/dataops-split-pipeline.json` | Direct split: wide messages → narrow records |
+
+Import any example via Node-RED's Import menu.
+
+## Canonical Record Shape
+
+All pipeline nodes share a common record shape that flows from split/transform through combine:
+
+```js
+{
+  name:      "plant/HWS/Denis/temperature",
+  type:      "number",
+  timestamp: 1716636000000,
+  value:     25.4,
+  quality:   true
+}
+```
+
+This is the narrow (normalized) form. The combine node assembles these into wide flat dictionaries.
 
 ## Development
 
@@ -104,12 +151,19 @@ After publish, resubmit at [flows.nodered.org/add/node](https://flows.nodered.or
 
 ```
 nodes/
-  dataops-cache.js/.html   - Config node: central cache + event hub
-  dataops-in.js/.html      - Push messages to cache
-  dataops-combine.js/.html - Combine by key within time window
-  dataops-split.js/.html   - Split via field extraction or array expansion
+  dataops-cache.js/.html      - Config node: central cache + event hub
+  dataops-in.js/.html         - Push messages to cache
+  dataops-combine.js/.html    - Buffer narrow records, emit wide flat dicts
+  dataops-split.js/.html      - Explode wide payloads into narrow records
+  dataops-claude-api.js/.html - Config node: Anthropic API credentials
+  dataops-claude.js/.html     - AI-assisted spec generation from cache
+  dataops-transform.js/.html  - Apply per-topic JSONata specs to messages
+lib/
+  toon.js                     - Token-Oriented Object Notation
+  coerce.js                   - Shared type coercion
+  sqlite-store.js             - Claude API call history
 examples/
-  dataops-example.json     - Demo flow
+  *.json                      - Importable demo flows
 ```
 
 ## License

@@ -1,0 +1,74 @@
+<script type="text/javascript">
+    RED.nodes.registerType('dataops-claude-api', {
+        category: 'config',
+        defaults: {
+            name: { value: "" },
+            model: { value: "claude-sonnet-4-6" },
+            baseUrl: { value: "https://api.anthropic.com/v1" },
+            maxTokens: { value: 16384, validate: RED.validators.number() },
+            temperature: { value: 0.7, validate: RED.validators.number() }
+        },
+        credentials: {
+            apiKey: { type: "password" }
+        },
+        label: function() {
+            return this.name || "Claude API";
+        }
+    });
+</script>
+
+<script type="text/html" data-template-name="dataops-claude-api">
+    <div class="form-row">
+        <label for="node-config-input-name"><i class="fa fa-tag"></i> Name</label>
+        <input type="text" id="node-config-input-name" placeholder="My Claude API">
+    </div>
+    <div class="form-row">
+        <label for="node-config-input-apiKey"><i class="fa fa-key"></i> API Key</label>
+        <input type="password" id="node-config-input-apiKey" placeholder="sk-ant-...">
+        <div class="form-tips">Your Anthropic API key. Stored securely by Node-RED.</div>
+    </div>
+    <div class="form-row">
+        <label for="node-config-input-model"><i class="fa fa-cube"></i> Model</label>
+        <input type="text" id="node-config-input-model" placeholder="claude-sonnet-4-6">
+        <div class="form-tips">Model ID (e.g., claude-sonnet-4-6, claude-opus-4-7).</div>
+    </div>
+    <div class="form-row">
+        <label for="node-config-input-baseUrl"><i class="fa fa-globe"></i> Base URL</label>
+        <input type="text" id="node-config-input-baseUrl" placeholder="https://api.anthropic.com/v1">
+        <div class="form-tips">API endpoint. Change only for proxies or compatible APIs.</div>
+    </div>
+    <div class="form-row">
+        <label for="node-config-input-maxTokens"><i class="fa fa-arrow-up"></i> Max Tokens</label>
+        <input type="number" id="node-config-input-maxTokens" placeholder="16384">
+        <div class="form-tips">Maximum output tokens for the response.</div>
+    </div>
+    <div class="form-row">
+        <label for="node-config-input-temperature"><i class="fa fa-thermometer-half"></i> Temperature</label>
+        <input type="number" id="node-config-input-temperature" placeholder="0.7" step="0.1" min="0" max="1">
+        <div class="form-tips">Response randomness (0 = deterministic, 1 = creative).</div>
+    </div>
+</script>
+
+<script type="text/html" data-help-name="dataops-claude-api">
+    <h3>Summary</h3>
+    <p>Configuration node for the Anthropic Claude API. Stores credentials and model settings shared by <code>dataops-claude</code> nodes.</p>
+
+    <h3>Properties</h3>
+    <dl class="message-properties">
+        <dt>Name</dt>
+        <dd>Label for this API configuration.</dd>
+        <dt>API Key</dt>
+        <dd>Anthropic API key (sk-ant-...). Stored encrypted in Node-RED's credential store.</dd>
+        <dt>Model</dt>
+        <dd>Claude model ID. Default: <code>claude-sonnet-4-6</code>.</dd>
+        <dt>Base URL</dt>
+        <dd>API endpoint. Change only when using a proxy or compatible API.</dd>
+        <dt>Max Tokens</dt>
+        <dd>Maximum tokens in the response. Default: 16384.</dd>
+        <dt>Temperature</dt>
+        <dd>Controls randomness (0–1). Default: 0.7.</dd>
+    </dl>
+
+    <h3>Notes</h3>
+    <p>The API key must have access to the Messages API. Requests use <code>anthropic-version: 2023-06-01</code>.</p>
+</script>

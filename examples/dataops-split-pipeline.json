@@ -1,0 +1,58 @@
+[
+    {
+        "id": "inject-wide",
+        "type": "inject",
+        "name": "Wide Sensor Message",
+        "topic": "plant/HWS/Denis",
+        "payload": "{\"T\":25.4,\"H\":60.2,\"pressure\":1013,\"alarmActive\":false,\"ts\":1716636000000}",
+        "payloadType": "json",
+        "repeat": "5",
+        "crontab": "",
+        "once": false,
+        "wires": [["split-wide"]]
+    },
+    {
+        "id": "split-wide",
+        "type": "dataops-split",
+        "name": "Split to Narrow Records",
+        "topicFilter": "plant/HWS/Denis",
+        "fields": "[\n  {\"name\": \"temperature\", \"type\": \"number\", \"path\": \"T\"},\n  {\"name\": \"humidity\",    \"type\": \"number\", \"path\": \"H\"},\n  {\"name\": \"pressure\",    \"type\": \"number\", \"path\": \"pressure\"},\n  {\"name\": \"alarm\",       \"type\": \"boolean\", \"path\": \"alarmActive\"}\n]",
+        "timestampExpr": "payload.ts",
+        "qualityExpr": "true",
+        "passthroughNonMatch": false,
+        "wires": [["debug-split"], ["debug-passthrough"]]
+    },
+    {
+        "id": "debug-split",
+        "type": "debug",
+        "name": "Split Records",
+        "active": true,
+        "wires": [["combine-split"]]
+    },
+    {
+        "id": "debug-passthrough",
+        "type": "debug",
+        "name": "Passthrough / Errors",
+        "active": true,
+        "wires": []
+    },
+    {
+        "id": "combine-split",
+        "type": "dataops-combine",
+        "name": "Re-Combine into Wide",
+        "triggerMode": "quorum",
+        "intervalMs": 1000,
+        "expectedNames": "temperature, humidity, pressure, alarm",
+        "outputTopic": "plant/HWS/Denis/combined",
+        "tsField": "ts",
+        "includeQuality": false,
+        "wires": [["debug-recombined"], []]
+    },
+    {
+        "id": "debug-recombined",
+        "type": "debug",
+        "name": "Re-Combined Output",
+        "active": true,
+        "wires": []
+    }
+]

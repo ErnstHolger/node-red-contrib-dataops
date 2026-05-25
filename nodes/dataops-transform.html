@@ -1,0 +1,116 @@
+<style>
+    .dataops-white-text { fill: #ffffff !important; }
+    .red-ui-palette-node[data-palette-type="dataops-transform"] .red-ui-palette-label { color: #ffffff !important; }
+</style>
+<script type="text/javascript">
+    RED.nodes.registerType('dataops-transform', {
+        category: 'data ops',
+        color: '#054E4E',
+        defaults: {
+            name:         { value: "" },
+            specScope:    { value: "global", required: true },
+            specKey:      { value: "dataopsSpecs", required: true },
+            keyField:     { value: "topic", required: true },
+            fallbackMode: { value: "heuristic", required: true }
+        },
+        inputs: 1,
+        outputs: 2,
+        outputLabels: ["transformed", "unknown / error"],
+        icon: "font-awesome/fa-exchange",
+        label: function() { return this.name || "transform"; },
+        labelStyle: function() { return (this.name ? "node_label_italic" : "") + " dataops-white-text"; },
+        paletteLabel: "transform"
+    });
+</script>
+
+<script type="text/html" data-template-name="dataops-transform">
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+        <input type="text" id="node-input-name" placeholder="Name">
+    </div>
+    <div class="form-row">
+        <label for="node-input-specScope"><i class="fa fa-globe"></i> Scope</label>
+        <select id="node-input-specScope" style="width:70%;">
+            <option value="global">global</option>
+            <option value="flow">flow</option>
+        </select>
+    </div>
+    <div class="form-row">
+        <label for="node-input-specKey"><i class="fa fa-key"></i> Spec Key</label>
+        <input type="text" id="node-input-specKey" placeholder="dataopsSpecs">
+        <div class="form-tips">Context key holding the per-topic spec dictionary (populated by <code>dataops-claude</code>).</div>
+    </div>
+    <div class="form-row">
+        <label for="node-input-keyField"><i class="fa fa-search"></i> Key Field</label>
+        <input type="text" id="node-input-keyField" placeholder="topic">
+        <div class="form-tips">Message property used to look up the spec (default <code>topic</code>).</div>
+    </div>
+    <div class="form-row">
+        <label for="node-input-fallbackMode"><i class="fa fa-life-ring"></i> No Spec</label>
+        <select id="node-input-fallbackMode" style="width:70%;">
+            <option value="heuristic">heuristic (payload.value.value → .value → .v → payload)</option>
+            <option value="passthrough">passthrough to output 2</option>
+            <option value="error">raise error</option>
+        </select>
+    </div>
+</script>
+
+<script type="text/html" data-help-name="dataops-transform">
+    <h3>Summary</h3>
+    <p>Applies a per-topic processing instruction (JSONata expressions for <code>value</code>, <code>timestamp</code>, <code>quality</code>) to an incoming message and emits a normalized payload.</p>
+
+    <h3>Spec Dictionary</h3>
+    <p>Looked up from <code>flow</code> or <code>global</code> context at the configured key. Shape:</p>
+    <pre>{
+  "testtopic/temperaturesensor": {
+    "type":      "number",
+    "value":     "payload.value.value",
+    "timestamp": "$toMillis(payload.sourceTimestamp)",
+    "quality":   "payload.statusCode = 0"
+  },
+  "plant/D1/temp": {
+    "type":      "number",
+    "value":     "payload",
+    "timestamp": "$millis()",
+    "quality":   true
+  }
+}</pre>
+    <p>The topic (dictionary key) IS the canonical <code>name</code> — slashes are preserved. <code>type</code> is a literal string. <code>value</code>, <code>timestamp</code>, and <code>quality</code> are JSONata expressions evaluated against the full <code>msg</code> object. Literal constants are valid: <code>true</code>, <code>42</code>.</p>
+
+    <h3>Type Coercion</h3>
+    <p>After the <code>value</code> JSONata is evaluated, the result is coerced into the declared <code>type</code>. Coercion failure returns <code>null</code> (the message still passes through, just with a null value). Supported types:</p>
+    <dl class="message-properties">
+        <dt>number / double / float / real</dt>
+        <dd>Parsed via <code>Number()</code>, must be finite.</dd>
+        <dt>integer / int / long / short</dt>
+        <dd>Parsed numerically, then <code>Math.trunc</code> applied.</dd>
+        <dt>boolean / bool</dt>
+        <dd>Accepts booleans, 0/1 numbers, and case-insensitive strings: true/false, 1/0, yes/no, on/off.</dd>
+        <dt>string / text / char</dt>
+        <dd>Objects are JSON-stringified, primitives pass through <code>String()</code>.</dd>
+        <dt>object / json</dt>
+        <dd>Objects pass through; strings are parsed as JSON (returns null on parse error).</dd>
+        <dt>(missing or unknown)</dt>
+        <dd>No coercion; value passes through as-is and <code>type</code> is inferred at runtime.</dd>
+    </dl>
+
+    <h3>Outputs</h3>
+    <dl class="message-properties">
+        <dt>Output 1 — transformed</dt>
+        <dd><code>msg.payload</code> = <code>{ name, type, timestamp, value, quality }</code><br>
+        <code>msg._spec</code> = <code>"spec"</code> or <code>"heuristic"</code><br>
+        <code>msg.topic</code> is preserved (original from source).</dd>
+        <dt>Output 2 — unknown / error</dt>
+        <dd>Sent when no spec is found (passthrough mode) or evaluation fails.</dd>
+    </dl>
+
+    <h3>No-Spec Fallback</h3>
+    <dl class="message-properties">
+        <dt>heuristic</dt>
+        <dd>name = <code>msg.topic</code> (un-normalized); type = inferred from the extracted value; value = <code>payload.value.value</code> → <code>payload.value</code> → <code>payload.v</code> → <code>payload</code>; timestamp = <code>Date.now()</code>; quality = <code>true</code>.</dd>
+        <dt>passthrough</dt>
+        <dd>Original message goes to output 2.</dd>
+        <dt>error</dt>
+        <dd>Node raises an error and the message goes to output 2.</dd>
+    </dl>
+</script>

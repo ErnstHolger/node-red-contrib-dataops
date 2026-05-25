@@ -1,101 +1,26 @@
+<style>
+    .dataops-white-text { fill: #ffffff !important; }
+    .red-ui-palette-node[data-palette-type="dataops-split"] .red-ui-palette-label { color: #ffffff !important; }
+</style>
 <script type="text/javascript">
     RED.nodes.registerType('dataops-split', {
         category: 'data ops',
-        color: '#4A7C59',
+        color: '#054E4E',
         defaults: {
-            name: { value: "" },
-            splitMode: { value: "fields" },
-            fieldGroups: { value: [] },
-            arrayPath: { value: "payload" },
-            includeContext: { value: "" }
+            name:                { value: "" },
+            topicFilter:         { value: "" },
+            fields:              { value: '[\n  {"name": "T", "type": "number"},\n  {"name": "H", "type": "number"}\n]' },
+            timestampExpr:       { value: "" },
+            qualityExpr:         { value: "" },
+            passthroughNonMatch: { value: false }
         },
         inputs: 1,
-        outputs: 4,
-        outputLabels: ["output 1", "output 2", "output 3", "output 4"],
+        outputs: 2,
+        outputLabels: ["split records", "passthrough / error"],
         icon: "font-awesome/fa-columns",
-        label: function() {
-            return this.name || "dataops split";
-        },
-        paletteLabel: "dataops split",
-        oneditprepare: function() {
-            const node = this;
-
-            function updateModeUI() {
-                const mode = $("#node-input-splitMode").val();
-                $(".fields-mode-row").toggle(mode === "fields");
-                $(".array-mode-row").toggle(mode === "array");
-            }
-            $("#node-input-splitMode").on("change", updateModeUI);
-
-            // Field groups editable list
-            const groupList = $("#node-input-fieldGroups-list").css({
-                'min-height': '120px',
-                'min-width': '500px'
-            }).editableList({
-                addItem: function(container, i, data) {
-                    const row = $('<div/>', { style: "display:flex; align-items:center; gap:4px; margin-bottom:3px;" }).appendTo(container);
-
-                    // Output number label
-                    $('<span/>', { style: "flex:0 0 auto; min-width:60px; font-weight:bold;" })
-                        .text("Output " + (i + 1) + ":")
-                        .appendTo(row);
-
-                    $('<input/>', {
-                        type: "text",
-                        placeholder: "field names",
-                        class: "group-fields"
-                    })
-                    .css({ flex: "1 1 auto" })
-                    .val(data.fields || "")
-                    .appendTo(row);
-
-                    $('<input/>', {
-                        type: "text",
-                        placeholder: "topic",
-                        class: "group-topic"
-                    })
-                    .css({ flex: "1 1 auto" })
-                    .val(data.topic || "")
-                    .appendTo(row);
-
-                    $('<input/>', {
-                        type: "text",
-                        placeholder: "table",
-                        class: "group-table"
-                    })
-                    .css({ flex: "0 1 auto", width: "100px" })
-                    .val(data.table || "")
-                    .appendTo(row);
-                },
-                removable: true,
-                addButton: true
-            });
-
-            if (node.fieldGroups && node.fieldGroups.length > 0) {
-                node.fieldGroups.forEach(function(g) {
-                    groupList.editableList('addItem', g);
-                });
-            } else {
-                groupList.editableList('addItem', { fields: 'temp, humidity', topic: 'sensors/environment', table: 'env_readings' });
-                groupList.editableList('addItem', { fields: 'pressure, flow', topic: 'sensors/process', table: 'process_readings' });
-            }
-
-            // Defer UI mode update so the DOM is ready
-            setTimeout(updateModeUI, 100);
-        },
-        oneditsave: function() {
-            const node = this;
-            node.fieldGroups = [];
-
-            $("#node-input-fieldGroups-list").editableList('items').each(function() {
-                const fields = $(this).find(".group-fields").val().trim();
-                const topic = $(this).find(".group-topic").val().trim();
-                const table = $(this).find(".group-table").val().trim();
-                if (fields) {
-                    node.fieldGroups.push({ fields: fields, topic: topic, table: table });
-                }
-            });
-        }
+        label: function() { return this.name || "split"; },
+        labelStyle: function() { return (this.name ? "node_label_italic" : "") + " dataops-white-text"; },
+        paletteLabel: "split"
     });
 </script>
 
@@ -105,80 +30,66 @@
         <input type="text" id="node-input-name" placeholder="Name">
     </div>
     <div class="form-row">
-        <label for="node-input-splitMode"><i class="fa fa-cog"></i> Split Mode</label>
-        <select id="node-input-splitMode" style="width:70%;">
-            <option value="fields">Field Extraction</option>
-            <option value="array">Array Expansion</option>
-        </select>
+        <label for="node-input-topicFilter"><i class="fa fa-filter"></i> Topic Filter</label>
+        <input type="text" id="node-input-topicFilter" placeholder="plant/HWS/Denis  |  plant/+/Denis  |  # (all)">
+        <div class="form-tips">MQTT-style filter. <code>+</code> = one segment, <code>#</code> = multi-level wildcard. Empty matches all.</div>
     </div>
-
-    <!-- Field extraction mode -->
-    <div class="fields-mode-row">
-        <div class="form-row">
-            <label style="width:100%;"><i class="fa fa-list-alt"></i> Field Groups</label>
-            <ol id="node-input-fieldGroups-list"></ol>
-            <div class="form-tips">
-                <b>Fields</b>: comma-separated field names from payload.
-                <b>Topic</b>: output topic for this group.
-                <b>Table</b>: sets <code>msg._table</code>. Up to 4 groups (one per output).
-            </div>
-        </div>
+    <div class="form-row" style="margin-bottom:6px;">
+        <label for="node-input-fields" style="align-self:flex-start;padding-top:8px;"><i class="fa fa-list-alt"></i> Fields</label>
     </div>
-
-    <!-- Array expansion mode -->
-    <div class="array-mode-row" style="display:none;">
-        <div class="form-row">
-            <label for="node-input-arrayPath"><i class="fa fa-list"></i> Array Path</label>
-            <input type="text" id="node-input-arrayPath" placeholder="payload">
-            <div class="form-tips">Message property path to the array. Default: <code>msg.payload</code>.</div>
-        </div>
-        <div class="form-row">
-            <label for="node-input-includeContext"><i class="fa fa-copy"></i> Include Context Fields</label>
-            <input type="text" id="node-input-includeContext" placeholder="e.g. device_id, timestamp">
-            <div class="form-tips">Comma-separated fields from the parent payload to include in each array element message.</div>
-        </div>
+    <div class="form-row">
+        <textarea id="node-input-fields" rows="8" style="width:100%;font-family:monospace;font-size:12px;"></textarea>
+        <div class="form-tips">JSON array. Each entry: <code>{"name": "&lt;output-name&gt;", "type": "&lt;number|integer|string|boolean|object&gt;", "path": "&lt;dot-path-in-payload&gt;"}</code>. <code>path</code> defaults to <code>name</code>. The output topic is <code>&lt;input-topic&gt;/&lt;name&gt;</code>.</div>
+    </div>
+    <div class="form-row">
+        <label for="node-input-timestampExpr"><i class="fa fa-clock-o"></i> Timestamp</label>
+        <input type="text" id="node-input-timestampExpr" placeholder="$millis()  |  payload.ts  |  $toMillis(payload.sourceTimestamp)">
+        <div class="form-tips">JSONata expression. Empty → <code>msg.timestamp</code> if set, else current time.</div>
+    </div>
+    <div class="form-row">
+        <label for="node-input-qualityExpr"><i class="fa fa-check-circle"></i> Quality</label>
+        <input type="text" id="node-input-qualityExpr" placeholder="true  |  payload.statusCode = 0">
+        <div class="form-tips">JSONata expression. Empty → <code>msg.quality</code> if set, else <code>true</code>.</div>
+    </div>
+    <div class="form-row">
+        <label style="width:auto;font-weight:normal;">
+            <input type="checkbox" id="node-input-passthroughNonMatch" style="width:auto;vertical-align:top;">
+            Pass non-matching messages through to output 2
+        </label>
     </div>
 </script>
 
 <script type="text/html" data-help-name="dataops-split">
     <h3>Summary</h3>
-    <p>Splits wide messages into narrower ones. Two modes: field extraction and array expansion.</p>
+    <p>Explodes a wide message (one payload with many tags) into N narrow normalized records — one per configured field, on output 1.</p>
 
-    <h3>Field Extraction Mode</h3>
-    <p>Define up to 4 output groups. Each group specifies which fields from the input payload go into that output. Each output can have its own topic and table.</p>
+    <h3>Example</h3>
+    <p>With <b>Topic Filter</b> = <code>plant/HWS/Denis</code> and <b>Fields</b>:</p>
+    <pre>[
+  {"name": "T", "type": "number"},
+  {"name": "H", "type": "number"},
+  {"name": "P", "type": "number", "path": "pressure"},
+  {"name": "alarm", "type": "boolean", "path": "alarmActive"}
+]</pre>
+    <p>An input message:</p>
+    <pre>{
+  "topic":   "plant/HWS/Denis",
+  "payload": { "T": 25.4, "H": 60.2, "pressure": 1013, "alarmActive": false, "ts": 1716636000000 }
+}</pre>
+    <p>Produces four output messages on output 1:</p>
+    <pre>{ "topic": "plant/HWS/Denis/T",     "payload": { "name": "T",     "type": "number",  "timestamp": ..., "value": 25.4,  "quality": true } }
+{ "topic": "plant/HWS/Denis/H",     "payload": { "name": "H",     "type": "number",  "timestamp": ..., "value": 60.2,  "quality": true } }
+{ "topic": "plant/HWS/Denis/P",     "payload": { "name": "P",     "type": "number",  "timestamp": ..., "value": 1013,  "quality": true } }
+{ "topic": "plant/HWS/Denis/alarm", "payload": { "name": "alarm", "type": "boolean", "timestamp": ..., "value": false, "quality": true } }</pre>
 
-    <h4>Example</h4>
-    <pre>
-Input payload:
-  { temp: 25.5, humidity: 60, pressure: 1013, flow: 42 }
-
-Group 1: fields="temp, humidity" topic="sensors/env" table="env"
-Group 2: fields="pressure, flow" topic="sensors/process" table="process"
-
-Output 1: { topic: "sensors/env",     payload: { temp: 25.5, humidity: 60 } }
-Output 2: { topic: "sensors/process", payload: { pressure: 1013, flow: 42 } }
-    </pre>
-
-    <h3>Array Expansion Mode</h3>
-    <p>Expands an array within the message into individual messages, one per element. Optionally includes context fields from the parent payload.</p>
-
-    <h4>Example</h4>
-    <pre>
-Input:
-  msg.payload = {
-    device_id: "D1",
-    readings: [{ ts: "12:00", value: 25 }, { ts: "12:01", value: 26 }]
-  }
-
-Array path: "payload.readings"
-Include context: "device_id"
-
-Output messages:
-  { payload: { device_id: "D1", ts: "12:00", value: 25 } }
-  { payload: { device_id: "D1", ts: "12:01", value: 26 } }
-    </pre>
+    <h3>Type Coercion</h3>
+    <p>Each extracted value is coerced into the declared <code>type</code>. Coercion failure produces <code>null</code> rather than dropping the message. Supported types: <code>number</code>, <code>integer</code>, <code>string</code>, <code>boolean</code>, <code>object</code> (and common aliases like <code>float</code>, <code>int</code>, <code>bool</code>).</p>
 
     <h3>Outputs</h3>
-    <p><b>Field mode</b>: Each field group maps to one output (up to 4).</p>
-    <p><b>Array mode</b>: All messages sent to output 1 sequentially.</p>
+    <dl class="message-properties">
+        <dt>Output 1 — split records</dt>
+        <dd>One message per configured field, payload = <code>{name, type, timestamp, value, quality}</code>.</dd>
+        <dt>Output 2 — passthrough / error</dt>
+        <dd>Non-matching topics (if <i>Pass non-matching</i> is checked) or evaluation errors.</dd>
+    </dl>
 </script>

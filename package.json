@@ -1,6 +1,6 @@
 {
   "name": "node-red-contrib-dataops",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "Node-RED nodes for data operations — cache, combine, and split messages for database workflows",
   "author": {
     "name": "Holger Amort"
@@ -30,8 +30,14 @@
       "dataops-cache": "nodes/dataops-cache.js",
       "dataops-in": "nodes/dataops-in.js",
       "dataops-combine": "nodes/dataops-combine.js",
-      "dataops-split": "nodes/dataops-split.js"
+      "dataops-split": "nodes/dataops-split.js",
+      "dataops-claude-api": "nodes/dataops-claude-api.js",
+      "dataops-claude": "nodes/dataops-claude.js",
+      "dataops-transform": "nodes/dataops-transform.js"
     }
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0"
   },
   "engines": {
     "node": ">=18.0.0"
