@@ -70,6 +70,7 @@ module.exports = function(RED) {
 
         node.topicFilter         = config.topicFilter || '';
         node.fields              = parseFieldsConfig(config.fields);
+        node.autoDetect          = !!config.autoDetect;
         node.timestampExpr       = config.timestampExpr || '';
         node.qualityExpr         = config.qualityExpr || '';
         node.passthroughNonMatch = !!config.passthroughNonMatch;
@@ -100,8 +101,20 @@ module.exports = function(RED) {
                     if (node.passthroughNonMatch) send([null, msg]);
                     return done();
                 }
-                if (node.fields.length === 0) {
-                    node.status({ fill: 'yellow', shape: 'ring', text: 'no fields configured' });
+
+                let effectiveFields = node.fields;
+
+                // Auto-detect: treat every object key as a field with inferred type
+                if (node.autoDetect && msg.payload && typeof msg.payload === 'object' && !Array.isArray(msg.payload)) {
+                    effectiveFields = Object.keys(msg.payload).map(k => ({
+                        name: k,
+                        type: null,
+                        path: k
+                    }));
+                }
+
+                if (effectiveFields.length === 0) {
+                    node.status({ fill: 'yellow', shape: 'ring', text: 'no fields' });
                     send([null, msg]);
                     return done();
                 }
@@ -114,7 +127,7 @@ module.exports = function(RED) {
                 ]);
 
                 const out = [];
-                for (const f of node.fields) {
+                for (const f of effectiveFields) {
                     const raw = getPath(msg.payload, f.path);
                     const value = f.type ? coerce(raw, f.type) : raw;
                     const type  = f.type || inferType(raw);
@@ -147,7 +160,7 @@ module.exports = function(RED) {
             }
         });
 
-        node.status({ fill: 'green', shape: 'dot', text: `${node.fields.length} fields` });
+        node.status({ fill: 'green', shape: 'dot', text: `${node.autoDetect ? 'auto ' : ''}${node.fields.length} fields` });
     }
 
     RED.nodes.registerType('dataops-split', DataOpsSplitNode);

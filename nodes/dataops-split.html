@@ -12,7 +12,8 @@
             fields:              { value: '[\n  {"name": "T", "type": "number"},\n  {"name": "H", "type": "number"}\n]' },
             timestampExpr:       { value: "" },
             qualityExpr:         { value: "" },
-            passthroughNonMatch: { value: false }
+            passthroughNonMatch: { value: false },
+            autoDetect:          { value: false }
         },
         inputs: 1,
         outputs: 2,
@@ -20,7 +21,14 @@
         icon: "font-awesome/fa-columns",
         label: function() { return this.name || "split"; },
         labelStyle: function() { return (this.name ? "node_label_italic" : "") + " dataops-white-text"; },
-        paletteLabel: "split"
+        paletteLabel: "split",
+        oneditprepare: function() {
+            var toggleFields = function() {
+                var auto = $('#node-input-autoDetect').is(':checked');
+                $('.row-fields').toggle(!auto);
+            };
+            $('#node-input-autoDetect').on('change', toggleFields).trigger('change');
+        }
     });
 </script>
 
@@ -35,9 +43,15 @@
         <div class="form-tips">MQTT-style filter. <code>+</code> = one segment, <code>#</code> = multi-level wildcard. Empty matches all.</div>
     </div>
     <div class="form-row" style="margin-bottom:6px;">
+        <label style="width:auto;font-weight:normal;">
+            <input type="checkbox" id="node-input-autoDetect" style="width:auto;vertical-align:top;">
+            Auto-detect all keys in payload (ignores Fields below)
+        </label>
+    </div>
+    <div class="form-row row-fields" style="margin-bottom:6px;">
         <label for="node-input-fields" style="align-self:flex-start;padding-top:8px;"><i class="fa fa-list-alt"></i> Fields</label>
     </div>
-    <div class="form-row">
+    <div class="form-row row-fields">
         <textarea id="node-input-fields" rows="8" style="width:100%;font-family:monospace;font-size:12px;"></textarea>
         <div class="form-tips">JSON array. Each entry: <code>{"name": "&lt;output-name&gt;", "type": "&lt;number|integer|string|boolean|object&gt;", "path": "&lt;dot-path-in-payload&gt;"}</code>. <code>path</code> defaults to <code>name</code>. The output topic is <code>&lt;input-topic&gt;/&lt;name&gt;</code>.</div>
     </div>
