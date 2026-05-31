@@ -1,0 +1,111 @@
+<style>
+    .dataops-white-text { fill: #ffffff !important; }
+    .red-ui-palette-node[data-palette-type="dataops-cron"] .red-ui-palette-label { color: #ffffff !important; }
+</style>
+<script type="text/javascript">
+    RED.nodes.registerType('dataops-cron', {
+        category: 'data ops',
+        color: '#054E4E',
+        defaults: {
+            name:         { value: "" },
+            cronExpr:     { value: "0 * * * * *", required: true },
+            outputTopic:  { value: "" },
+            payloadType:  { value: "timestamp", required: true },
+            payloadValue: { value: "" }
+        },
+        inputs: 0,
+        outputs: 2,
+        outputLabels: ["tick", "error"],
+        icon: "font-awesome/fa-clock-o",
+        label: function() { return this.name || "cron"; },
+        labelStyle: function() { return (this.name ? "node_label_italic" : "") + " dataops-white-text"; },
+        paletteLabel: "cron",
+        oneditprepare: function() {
+            $('#node-input-payloadType').on('change', function() {
+                var t = $(this).val();
+                $('.row-payload-value').toggle(t !== 'timestamp' && t !== 'date');
+            }).trigger('change');
+        }
+    });
+</script>
+
+<script type="text/html" data-template-name="dataops-cron">
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+        <input type="text" id="node-input-name" placeholder="Name">
+    </div>
+    <div class="form-row">
+        <label for="node-input-cronExpr"><i class="fa fa-clock-o"></i> Cron</label>
+        <input type="text" id="node-input-cronExpr" placeholder="0 * * * * *" style="font-family:monospace;">
+        <div class="form-tips">
+            6 fields: <code>sec min hour dom mon dow</code>.
+            Each: <code>*</code>, <code>5</code>, <code>1-30</code>, <code>*&#47;15</code>, <code>0,30</code>.
+            Example <code>0 *&#47;5 * * * *</code> = every 5 min; <code>*&#47;10 * * * * *</code> = every 10 sec.
+        </div>
+    </div>
+    <div class="form-row">
+        <label for="node-input-payloadType"><i class="fa fa-envelope"></i> Payload</label>
+        <select id="node-input-payloadType" style="width:70%;">
+            <option value="timestamp">timestamp (ms since epoch)</option>
+            <option value="date">Date object</option>
+            <option value="str">string</option>
+            <option value="num">number</option>
+            <option value="bool">boolean</option>
+            <option value="json">JSON</option>
+        </select>
+    </div>
+    <div class="form-row row-payload-value">
+        <label for="node-input-payloadValue"><i class="fa fa-pencil"></i> Value</label>
+        <input type="text" id="node-input-payloadValue" placeholder="payload value">
+        <div class="form-tips">The literal value to emit for the selected payload type.</div>
+    </div>
+    <div class="form-row">
+        <label for="node-input-outputTopic"><i class="fa fa-share"></i> Topic</label>
+        <input type="text" id="node-input-outputTopic" placeholder="(optional)">
+    </div>
+</script>
+
+<script type="text/html" data-help-name="dataops-cron">
+    <h3>Summary</h3>
+    <p>A cron-style timer trigger. Fires a message whenever the current time matches a
+    6-field cron expression. The node has no inputs.</p>
+
+    <h3>Cron Expression</h3>
+    <pre>┌──────── second       (0-59)
+│ ┌────── minute       (0-59)
+│ │ ┌──── hour         (0-23)
+│ │ │ ┌── day-of-month (1-31)
+│ │ │ │ ┌ month        (1-12)
+│ │ │ │ │ ┌ day-of-week (0-6, Sun=0; 7=Sun)
+* * * * * *</pre>
+    <p>Every field supports a single value, a wildcard <code>*</code>, a range
+    <code>a-b</code>, a step <code>*&#47;n</code> or <code>a-b/n</code>, and
+    comma-separated lists of any of these.</p>
+
+    <h4>Examples</h4>
+    <dl class="message-properties">
+        <dt><code>0 * * * * *</code></dt><dd>Top of every minute (default).</dd>
+        <dt><code>*&#47;10 * * * * *</code></dt><dd>Every 10 seconds.</dd>
+        <dt><code>0 *&#47;5 * * * *</code></dt><dd>Every 5 minutes.</dd>
+        <dt><code>0 0 9 * * 1-5</code></dt><dd>09:00 on weekdays.</dd>
+        <dt><code>0 30 8 1 * *</code></dt><dd>08:30 on the 1st of every month.</dd>
+    </dl>
+    <p>Times are evaluated against the <b>local</b> timezone of the Node-RED host.
+    When both day-of-month and day-of-week are restricted, a match on
+    <i>either</i> fires (standard cron behaviour).</p>
+
+    <h3>Payload</h3>
+    <p>Choose what each tick emits: <code>timestamp</code> (ms since epoch, default),
+    a <code>Date</code> object, or a literal <code>string</code> / <code>number</code> /
+    <code>boolean</code> / <code>JSON</code> value.</p>
+
+    <h3>Output</h3>
+    <dl class="message-properties">
+        <dt>Output 1 — tick</dt>
+        <dd><code>{ payload, timestamp, _epoch, topic?, _cron, _tick }</code>.
+        <code>timestamp</code> is an ISO 8601 string, <code>_epoch</code> is numeric ms,
+        and <code>_tick</code> is the fire count since deploy.</dd>
+        <dt>Output 2 — error</dt>
+        <dd>Payload-build or send errors.</dd>
+    </dl>
+</script>

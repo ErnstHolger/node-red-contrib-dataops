@@ -8,20 +8,17 @@
         color: '#054E4E',
         defaults: {
             name: { value: "" },
-            cache: { value: "", type: "dataops-cache", required: true },
-            keyField: { value: "topic" }
+            specScope: { value: "global", required: true },
+            specKey: { value: "", required: true },
+            keyField: { value: "topic" },
+            storeMode: { value: "wrapped" },
+            maxEntries: { value: 0, validate: RED.validators.number() },
+            ttl: { value: 0, validate: RED.validators.number() }
         },
         inputs: 1,
         outputs: 1,
         icon: "font-awesome/fa-arrow-circle-right",
-        label: function() {
-            if (this.name) return this.name;
-            if (this.cache) {
-                var c = RED.nodes.node(this.cache);
-                if (c && c.name) return c.name;
-            }
-            return "cache";
-        },
+        label: function() { return this.name || "cache in"; },
         labelStyle: function() { return (this.name ? "node_label_italic" : "") + " dataops-white-text"; },
         paletteLabel: "cache"
     });
@@ -33,26 +30,60 @@
         <input type="text" id="node-input-name" placeholder="Name">
     </div>
     <div class="form-row">
-        <label for="node-input-cache"><i class="fa fa-database"></i> Cache</label>
-        <input type="text" id="node-input-cache">
+        <label for="node-input-specScope"><i class="fa fa-globe"></i> Scope</label>
+        <select id="node-input-specScope" style="width:70%;">
+            <option value="global">global</option>
+            <option value="flow">flow</option>
+        </select>
     </div>
     <div class="form-row">
-        <label for="node-input-keyField"><i class="fa fa-key"></i> Key Field</label>
+        <label for="node-input-specKey"><i class="fa fa-key"></i> Spec Key</label>
+        <input type="text" id="node-input-specKey" placeholder="(e.g. dataopsCache)">
+        <div class="form-tips">Context dictionary written to, at <code>&lt;scope&gt;.&lt;key&gt;</code>. Point a <code>dataops-claude</code> <b>Source</b> at the same Scope &amp; Spec Key.</div>
+    </div>
+    <div class="form-row">
+        <label for="node-input-keyField"><i class="fa fa-search"></i> Key Field</label>
         <input type="text" id="node-input-keyField" placeholder="topic">
-        <div class="form-tips">Message property used as cache key (default: <code>msg.topic</code>).</div>
+        <div class="form-tips">Message property used as the entry key within the dictionary (default: <code>msg.topic</code>).</div>
+    </div>
+    <div class="form-row">
+        <label for="node-input-storeMode"><i class="fa fa-cube"></i> Store</label>
+        <select id="node-input-storeMode" style="width:70%;">
+            <option value="wrapped">wrapped — { payload, ts, metadata, previous }</option>
+            <option value="flat">flat — store payload as-is</option>
+        </select>
+        <div class="form-tips"><b>wrapped</b>: raw ingest with history (use as a <code>dataops-claude</code> Source). <b>flat</b>: a clean cache of already-normalized records (e.g. <code>dataops-transform</code> output) — stores <code>msg.payload</code> directly, no envelope. <i>TTL needs wrapped mode</i> (flat entries have no timestamp).</div>
+    </div>
+    <div class="form-row">
+        <label for="node-input-maxEntries"><i class="fa fa-database"></i> Max Entries</label>
+        <input type="number" id="node-input-maxEntries" placeholder="0" min="0">
+        <div class="form-tips">Cap the dictionary size; oldest entries are evicted (LRU) when exceeded. <code>0</code> = unbounded.</div>
+    </div>
+    <div class="form-row">
+        <label for="node-input-ttl"><i class="fa fa-clock-o"></i> TTL (ms)</label>
+        <input type="number" id="node-input-ttl" placeholder="0" min="0">
+        <div class="form-tips">Entries older than this are purged. <code>0</code> = no expiry.</div>
     </div>
 </script>
 
 <script type="text/html" data-help-name="dataops-in">
     <h3>Summary</h3>
-    <p>Pushes incoming messages into the DataOps cache. The full <code>msg.payload</code> is stored keyed by the configured field.</p>
+    <p>Pushes incoming messages into a context dictionary at <code>&lt;scope&gt;.&lt;key&gt;</code>, keyed by the value at <i>Key Field</i>. The <i>Store</i> mode controls the stored shape: <b>wrapped</b> entries <code>{ payload, ts, metadata, previous }</code> (consumable by <code>dataops-claude</code>), or <b>flat</b> — the bare <code>msg.payload</code> as-is (a clean cache of normalized records).</p>
 
     <h3>Properties</h3>
     <dl class="message-properties">
-        <dt>Cache</dt>
-        <dd>The dataops-cache config node to use.</dd>
+        <dt>Scope</dt>
+        <dd>Context store to write to: <code>global</code> or <code>flow</code>.</dd>
+        <dt>Spec Key</dt>
+        <dd>Key of the dictionary within the scope. Point a <code>dataops-claude</code> Source at the same Scope &amp; Spec Key.</dd>
         <dt>Key Field</dt>
-        <dd>Message property used as the cache key. Default: <code>msg.topic</code>.</dd>
+        <dd>Message property used as the entry key within the dictionary. Default: <code>msg.topic</code>.</dd>
+        <dt>Store</dt>
+        <dd><b>wrapped</b> (default): <code>{ payload, ts, metadata, previous }</code> — keeps history; use as a <code>dataops-claude</code> Source. <b>flat</b>: stores <code>msg.payload</code> directly with no envelope — for a clean cache of normalized records (e.g. <code>dataops-transform</code> output). TTL applies only in wrapped mode.</dd>
+        <dt>Max Entries</dt>
+        <dd>Optional LRU cap; oldest entries (by timestamp) are evicted when exceeded. <code>0</code> = unbounded.</dd>
+        <dt>TTL (ms)</dt>
+        <dd>Optional expiry; entries older than this are purged on a timer. <code>0</code> = no expiry.</dd>
     </dl>
 
     <h3>Output</h3>

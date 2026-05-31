@@ -15,7 +15,7 @@
     "database",
     "streaming"
   ],
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "MIT",
   "homepage": "https://github.com/ErnstHolger/node-red-contrib-dataops#readme",
   "bugs": {
     "url": "https://github.com/ErnstHolger/node-red-contrib-dataops/issues"
@@ -27,18 +27,17 @@
   "node-red": {
     "version": ">=2.0.0",
     "nodes": {
-      "dataops-cache": "nodes/dataops-cache.js",
       "dataops-in": "nodes/dataops-in.js",
       "dataops-combine": "nodes/dataops-combine.js",
       "dataops-split": "nodes/dataops-split.js",
+      "dataops-cron": "nodes/dataops-cron.js",
+      "dataops-shape": "nodes/dataops-shape.js",
       "dataops-claude-api": "nodes/dataops-claude-api.js",
       "dataops-claude": "nodes/dataops-claude.js",
       "dataops-transform": "nodes/dataops-transform.js"
     }
   },
-  "dependencies": {
-    "better-sqlite3": "^11.7.0"
-  },
+  "dependencies": {},
   "engines": {
     "node": ">=18.0.0"
   },

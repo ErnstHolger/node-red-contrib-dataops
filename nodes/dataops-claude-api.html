@@ -71,4 +71,109 @@
 
     <h3>Notes</h3>
     <p>The API key must have access to the Messages API. Requests use <code>anthropic-version: 2023-06-01</code>.</p>
+    <p>This config node also powers the <b>DataOps AI</b> sidebar tab, where you can describe a pipeline in plain English and import a generated flow.</p>
+</script>
+
+<!-- ===================== DataOps AI sidebar tab ===================== -->
+<script type="text/javascript">
+(function() {
+    if (!RED.sidebar || !RED.sidebar.addTab) return;
+
+    var content = $('<div>', { class: 'dataops-ai-sidebar', style: 'padding:8px;height:100%;box-sizing:border-box;overflow:auto;' });
+
+    $('<p>', { style: 'margin:0 0 8px;color:#777;' })
+        .html('Describe a DataOps pipeline in plain English. Claude generates a flow using this package\'s nodes, which you then import onto the canvas.')
+        .appendTo(content);
+
+    // API config picker
+    var cfgRow = $('<div>', { class: 'form-row', style: 'margin-bottom:6px;' }).appendTo(content);
+    $('<label>', { style: 'width:auto;' }).html('<i class="fa fa-key"></i> API Config').appendTo(cfgRow);
+    var cfgSelect = $('<select>', { id: 'dataops-ai-config', style: 'width:100%;' }).appendTo(cfgRow);
+
+    // Description box
+    var desc = $('<textarea>', {
+        id: 'dataops-ai-desc', rows: 5,
+        style: 'width:100%;box-sizing:border-box;font-family:monospace;margin-bottom:6px;',
+        placeholder: 'e.g. Every 10s read sensor topics into the cache, ask Claude for specs, then transform and combine into a wide record.'
+    }).appendTo(content);
+
+    var btn = $('<button>', { class: 'red-ui-button', style: 'width:100%;margin-bottom:8px;' })
+        .html('<i class="fa fa-magic"></i> Generate flow')
+        .appendTo(content);
+
+    var status = $('<div>', { style: 'min-height:18px;color:#777;margin-bottom:6px;font-size:0.85em;' }).appendTo(content);
+
+    // Result preview + import
+    var resultBox = $('<div>', { style: 'display:none;' }).appendTo(content);
+    var pre = $('<pre>', { style: 'max-height:200px;overflow:auto;background:#f7f7f7;padding:6px;font-size:0.8em;border:1px solid #ddd;' }).appendTo(resultBox);
+    var importBtn = $('<button>', { class: 'red-ui-button', style: 'width:100%;' })
+        .html('<i class="fa fa-sign-in"></i> Import to canvas').appendTo(resultBox);
+
+    var lastFlow = null;
+
+    function loadConfigs() {
+        cfgSelect.empty();
+        $.getJSON('dataops/claude/configs').done(function(data) {
+            if (!data.configs || !data.configs.length) {
+                cfgSelect.append($('<option>', { value: '', text: '(no API config — create one first)' }));
+                return;
+            }
+            data.configs.forEach(function(c) {
+                cfgSelect.append($('<option>', { value: c.id, text: c.name }));
+            });
+        }).fail(function() {
+            cfgSelect.append($('<option>', { value: '', text: '(failed to load configs)' }));
+        });
+    }
+
+    btn.on('click', function() {
+        var configId = cfgSelect.val();
+        var description = desc.val().trim();
+        if (!configId) { status.css('color', '#a00').text('Select an API config (deploy it first).'); return; }
+        if (!description) { status.css('color', '#a00').text('Enter a description.'); return; }
+
+        btn.prop('disabled', true);
+        resultBox.hide();
+        lastFlow = null;
+        status.css('color', '#777').html('<i class="fa fa-spinner fa-spin"></i> Asking Claude…');
+
+        $.ajax({
+            url: 'dataops/claude/generate-flow', method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ configId: configId, description: description })
+        }).done(function(data) {
+            lastFlow = data.flow;
+            pre.text(JSON.stringify(data.flow, null, 2));
+            resultBox.show();
+            var tok = data.usage ? (' · ' + data.usage.input_tokens + '→' + data.usage.output_tokens + ' tok') : '';
+            status.css('color', '#393').text(data.flow.length + ' nodes generated' + tok);
+        }).fail(function(xhr) {
+            var msg = (xhr.responseJSON && xhr.responseJSON.error) || xhr.statusText || 'request failed';
+            status.css('color', '#a00').text('Error: ' + msg);
+        }).always(function() {
+            btn.prop('disabled', false);
+        });
+    });
+
+    importBtn.on('click', function() {
+        if (!lastFlow) return;
+        try {
+            // Native import: nodes attach to the cursor; user clicks to place. Undo-able.
+            RED.view.importNodes(JSON.stringify(lastFlow), { generateIds: true });
+            status.css('color', '#393').text('Imported — click on the canvas to place the nodes.');
+        } catch (err) {
+            status.css('color', '#a00').text('Import failed: ' + err.message);
+        }
+    });
+
+    RED.sidebar.addTab({
+        id: 'dataops-ai',
+        name: 'DataOps AI',
+        label: 'DataOps AI',
+        iconClass: 'fa fa-magic',
+        content: content,
+        closeable: true,
+        onchange: function() { loadConfigs(); }
+    });
+})();
 </script>

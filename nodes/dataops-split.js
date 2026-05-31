@@ -104,13 +104,30 @@ module.exports = function(RED) {
 
                 let effectiveFields = node.fields;
 
+                // Auto-unwrap canonical records: a payload shaped
+                //   { name, type, value: {...}, quality }
+                // carries the real fields under `value`. Explode those, not the
+                // wrapper keys. Field paths become "value.<field>".
+                const p = msg.payload;
+                const isCanonicalRecord = p && typeof p === 'object' && !Array.isArray(p)
+                    && 'name' in p && 'value' in p && 'quality' in p
+                    && p.value && typeof p.value === 'object' && !Array.isArray(p.value);
+
                 // Auto-detect: treat every object key as a field with inferred type
-                if (node.autoDetect && msg.payload && typeof msg.payload === 'object' && !Array.isArray(msg.payload)) {
-                    effectiveFields = Object.keys(msg.payload).map(k => ({
-                        name: k,
-                        type: null,
-                        path: k
-                    }));
+                if (node.autoDetect && p && typeof p === 'object' && !Array.isArray(p)) {
+                    if (isCanonicalRecord) {
+                        effectiveFields = Object.keys(p.value).map(k => ({
+                            name: k,
+                            type: null,
+                            path: `value.${k}`
+                        }));
+                    } else {
+                        effectiveFields = Object.keys(p).map(k => ({
+                            name: k,
+                            type: null,
+                            path: k
+                        }));
+                    }
                 }
 
                 if (effectiveFields.length === 0) {
@@ -119,8 +136,11 @@ module.exports = function(RED) {
                     return done();
                 }
 
-                const tsFallback   = (typeof msg.timestamp === 'number') ? msg.timestamp : Date.now();
-                const qualFallback = (msg.quality !== undefined) ? msg.quality : true;
+                // For canonical records, prefer the record's own timestamp/quality.
+                const tsFallback   = isCanonicalRecord && typeof p.timestamp === 'number' ? p.timestamp
+                                   : (typeof msg.timestamp === 'number') ? msg.timestamp : Date.now();
+                const qualFallback = isCanonicalRecord && p.quality !== undefined ? p.quality
+                                   : (msg.quality !== undefined) ? msg.quality : true;
                 const [ts, qual] = await Promise.all([
                     evalOr(preparedTs, msg, tsFallback),
                     evalOr(preparedQ,  msg, qualFallback)
@@ -131,7 +151,10 @@ module.exports = function(RED) {
                     const raw = getPath(msg.payload, f.path);
                     const value = f.type ? coerce(raw, f.type) : raw;
                     const type  = f.type || inferType(raw);
-                    const outTopic = msg.topic ? `${msg.topic}/${f.name}` : f.name;
+                    // topic base: msg.topic, else the record's name (canonical records
+                    // carry the topic in payload.name), else the bare field name.
+                    const topicBase = msg.topic || (isCanonicalRecord ? p.name : '') || '';
+                    const outTopic = topicBase ? `${topicBase}/${f.name}` : f.name;
                     out.push({
                         topic: outTopic,
                         payload: {

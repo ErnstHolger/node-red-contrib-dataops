@@ -1,12 +1,5 @@
 [
     {
-        "id": "cache-ai",
-        "type": "dataops-cache",
-        "name": "AI Pipeline Cache",
-        "maxEntries": 10000,
-        "ttl": 0
-    },
-    {
         "id": "claude-api-config",
         "type": "dataops-claude-api",
         "name": "My Claude API"
@@ -27,8 +20,11 @@
         "id": "in-temp",
         "type": "dataops-in",
         "name": "Cache Temperature",
-        "cache": "cache-ai",
+        "specScope": "global",
+        "specKey": "AI_Pipeline_Cache",
         "keyField": "topic",
+        "maxEntries": 10000,
+        "ttl": 0,
         "wires": [["debug-temp-raw"]]
     },
     {
@@ -54,8 +50,11 @@
         "id": "in-hum",
         "type": "dataops-in",
         "name": "Cache Humidity",
-        "cache": "cache-ai",
+        "specScope": "global",
+        "specKey": "AI_Pipeline_Cache",
         "keyField": "topic",
+        "maxEntries": 10000,
+        "ttl": 0,
         "wires": [["debug-hum-raw"]]
     },
     {
@@ -121,13 +120,13 @@
         "id": "claude-node",
         "type": "dataops-claude",
         "name": "Generate Normalization Specs",
-        "cache": "cache-ai",
         "apiConfig": "claude-api-config",
         "systemPrompt": "",
-        "specContextScope": "global",
-        "specContextKey": "dataopsSpecs",
+        "sourceScope": "global",
+        "sourceKey": "AI_Pipeline_Cache",
+        "specScope": "global",
+        "specKey": "dataopsSpecs",
         "maxSampleRows": 250,
-        "dbPath": "",
         "wires": [["debug-specs"], ["debug-claude-error"]]
     },
     {

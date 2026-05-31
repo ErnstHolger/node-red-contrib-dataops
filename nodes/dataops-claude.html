@@ -8,26 +8,19 @@
         color: '#054E4E',
         defaults: {
             name: { value: "" },
-            cache: { value: "", type: "dataops-cache", required: true },
             apiConfig: { value: "", type: "dataops-claude-api", required: true },
             systemPrompt: { value: "" },
-            specContextScope: { value: "global" },
-            specContextKey: { value: "" },
-            maxSampleRows: { value: 250, validate: RED.validators.number() },
-            dbPath: { value: "" }
+            sourceScope: { value: "global", required: true },
+            sourceKey: { value: "", required: true },
+            specScope: { value: "global", required: true },
+            specKey: { value: "dataopsSpecs", required: true },
+            maxSampleRows: { value: 250, validate: RED.validators.number() }
         },
         inputs: 1,
         outputs: 2,
         outputLabels: ["result", "error"],
         icon: "font-awesome/fa-commenting",
-        label: function() {
-            if (this.name) return this.name;
-            if (this.cache) {
-                var c = RED.nodes.node(this.cache);
-                if (c && c.name) return c.name;
-            }
-            return "claude";
-        },
+        label: function() { return this.name || "claude"; },
         labelStyle: function() { return (this.name ? "node_label_italic" : "") + " dataops-white-text"; },
         paletteLabel: "claude"
     });
@@ -39,63 +32,76 @@
         <input type="text" id="node-input-name" placeholder="Name">
     </div>
     <div class="form-row">
-        <label for="node-input-cache"><i class="fa fa-database"></i> Cache</label>
-        <input type="text" id="node-input-cache">
-        <div class="form-tips">DataOps cache to read entries from.</div>
-    </div>
-    <div class="form-row">
         <label for="node-input-apiConfig"><i class="fa fa-commenting"></i> Claude API</label>
         <input type="text" id="node-input-apiConfig">
         <div class="form-tips">API configuration node with credentials and model settings.</div>
     </div>
     <div class="form-row">
         <label for="node-input-systemPrompt" style="align-self:flex-start;padding-top:8px;"><i class="fa fa-pencil"></i> System Prompt</label>
-        <textarea id="node-input-systemPrompt" rows="6" style="width:100%;font-family:monospace;"
-            placeholder="# Role&#10;Normalize a Node-RED msg dictionary into canonical (timestamp, value, quality) records.&#10;&#10;# Input&#10;A dictionary where each key is a topic (string) and each value is a Node-RED msg object.&#10;&#10;# Output&#10;A dictionary with the same keys, where each value is exactly:&#10;{&#10;  &quot;timestamp&quot;: &lt;epoch milliseconds, number&gt;,&#10;  &quot;value&quot;:     &lt;primitive: number | string | boolean&gt;,&#10;  &quot;quality&quot;:   &lt;boolean | string&gt;&#10;}&#10;&#10;# Rules&#10;&#10;## timestamp&#10;- If msg.timestamp is set, use it as-is.&#10;- Otherwise use the current time.&#10;- Never infer a timestamp from any other field.&#10;&#10;## value&#10;- If msg.payload is a primitive (number, string, boolean), use it directly.&#10;- If msg.payload is an object, walk this priority list and use the first key that exists:&#10;  1. payload.value.value   — OPC UA Variant wrapper&#10;  2. payload.value         — Kepware / generic IIoT&#10;  3. payload.v             — Sparkplug B / compact convention&#10;- If none match, return msg.payload as-is.&#10;&#10;## quality&#10;- If msg.quality is set, use it as-is.&#10;- Otherwise set quality = true.&#10;&#10;# Output format&#10;Return only the normalized dictionary as valid JSON. No prose, no markdown fences, no commentary."></textarea>
+        <textarea id="node-input-systemPrompt" rows="6" style="width:100%;box-sizing:border-box;font-family:monospace;"
+            placeholder="Leave empty to use the built-in IIoT normalization prompt."></textarea>
         <div class="form-tips">System prompt that sets Claude's role. Leave empty for no system prompt.</div>
     </div>
+
+    <div class="form-row" style="margin-bottom:0;">
+        <label style="width:auto;font-weight:bold;"><i class="fa fa-sign-in"></i> Source</label>
+        <span class="form-tips" style="display:inline;margin-left:4px;">Cache samples to analyze, read from <code>&lt;scope&gt;.&lt;key&gt;</code> (the dict <code>dataops-in</code> writes to context).</span>
+    </div>
     <div class="form-row">
-        <label for="node-input-specContextScope"><i class="fa fa-globe"></i> Spec Scope</label>
-        <select id="node-input-specContextScope" style="width:70%;">
+        <label for="node-input-sourceScope"><i class="fa fa-globe"></i> Spec Scope</label>
+        <select id="node-input-sourceScope" style="width:70%;">
             <option value="global">global</option>
             <option value="flow">flow</option>
         </select>
     </div>
     <div class="form-row">
-        <label for="node-input-specContextKey"><i class="fa fa-key"></i> Spec Key</label>
-        <input type="text" id="node-input-specContextKey" placeholder="(leave empty to skip context write)">
-        <div class="form-tips">If set, the parsed JSON response is merged into <code>&lt;scope&gt;.&lt;key&gt;</code> as a dictionary. Consumed by <code>dataops-transform</code>.</div>
+        <label for="node-input-sourceKey"><i class="fa fa-key"></i> Spec Key</label>
+        <input type="text" id="node-input-sourceKey" placeholder="(cache name, e.g. dataopsCache)">
     </div>
+
+    <div class="form-row" style="margin-bottom:0;">
+        <label style="width:auto;font-weight:bold;"><i class="fa fa-sign-out"></i> Destination</label>
+        <span class="form-tips" style="display:inline;margin-left:4px;">Generated specs merged into <code>&lt;scope&gt;.&lt;key&gt;</code>. Consumed by <code>dataops-transform</code> — use the same Scope &amp; Spec Key there.</span>
+    </div>
+    <div class="form-row">
+        <label for="node-input-specScope"><i class="fa fa-globe"></i> Spec Scope</label>
+        <select id="node-input-specScope" style="width:70%;">
+            <option value="global">global</option>
+            <option value="flow">flow</option>
+        </select>
+    </div>
+    <div class="form-row">
+        <label for="node-input-specKey"><i class="fa fa-key"></i> Spec Key</label>
+        <input type="text" id="node-input-specKey" placeholder="dataopsSpecs">
+    </div>
+
     <div class="form-row">
         <label for="node-input-maxSampleRows"><i class="fa fa-list-ol"></i> Sample Rows</label>
         <input type="number" id="node-input-maxSampleRows" placeholder="250" min="1">
-        <div class="form-tips">Max cache entries sent to the LLM per call. If the cache has more, only the first N are included. Default 250.</div>
-    </div>
-    <div class="form-row">
-        <label for="node-input-dbPath"><i class="fa fa-hdd-o"></i> DB Path</label>
-        <input type="text" id="node-input-dbPath" placeholder="auto">
-        <div class="form-tips">SQLite database path. Defaults to <code>&lt;userDir&gt;/dataops.db</code> if empty.</div>
+        <div class="form-tips">Max source entries sent to the LLM per call. If the source has more, only the first N are included. Default 250.</div>
     </div>
 </script>
 
 <script type="text/html" data-help-name="dataops-claude">
     <h3>Summary</h3>
-    <p>Sends all entries from a <code>dataops-cache</code> to the Anthropic Claude API for analysis and configuration generation. Results are stored in a local SQLite database for history.</p>
+    <p>Reads cache samples from a context dictionary, sends them to the Anthropic Claude API to generate per-topic normalization specs, and merges the result into a destination context dictionary consumed by <code>dataops-transform</code>.</p>
 
     <h3>Properties</h3>
     <dl class="message-properties">
-        <dt>Cache</dt>
-        <dd>The <code>dataops-cache</code> config node to read entries from.</dd>
         <dt>Claude API</dt>
         <dd>The <code>dataops-claude-api</code> config node with API credentials.</dd>
         <dt>System Prompt</dt>
         <dd>Sets Claude's role/behavior. Optional. Shown as <code>system</code> in the API call.</dd>
-        <dt>DB Path</dt>
-        <dd>Path to the SQLite database file for config history. Leave empty to use <code>&lt;userDir&gt;/dataops.db</code>.</dd>
+        <dt>Source (Spec Scope + Key)</dt>
+        <dd>Context location of the cache samples to analyze — <code>&lt;scope&gt;.&lt;key&gt;</code>. This is the dictionary <code>dataops-in</code> writes to context, shaped <code>{ topic: { payload, ts, metadata } }</code>. Use the same Scope &amp; Spec Key as the <code>dataops-in</code> node.</dd>
+        <dt>Destination (Spec Scope + Key)</dt>
+        <dd>Context location the generated spec dictionary is merged into. Point <code>dataops-transform</code> at the same Scope &amp; Spec Key.</dd>
+        <dt>Sample Rows</dt>
+        <dd>Max source entries sent per call (default 250).</dd>
     </dl>
 
     <h3>Input</h3>
-    <p>The node triggers on any incoming message. If <code>msg.payload</code> is a string, it is used as the complete user message sent to Claude (overriding the default prompt). Otherwise, a default prompt is generated that includes the CSV data and asks Claude to produce topic-to-table route mappings.</p>
+    <p>The node triggers on any incoming message. If <code>msg.payload</code> is a string, it is used as the complete user message sent to Claude (overriding the default prompt). Otherwise, a default prompt is generated that encodes the source samples as TOON and asks Claude to produce per-topic specs.</p>
 
     <h3>Outputs</h3>
     <dl class="message-properties">
@@ -107,9 +113,4 @@
         <code>msg._error</code> — Set to true.</dd>
     </dl>
 
-    <h3>CSV Format</h3>
-    <p>Cache entries are formatted as CSV for token efficiency. The columns <code>topic</code> (from metadata) and <code>timestamp</code> (from entry.ts) are always included first. All top-level payload keys are unioned across entries into additional columns. Primitive payloads use a single <code>value</code> column.</p>
-
-    <h3>SQLite History</h3>
-    <p>Every successful API call is recorded in the <code>config_history</code> table: node_id, timestamp, cache_size, model, prompts, response, token usage, duration.</p>
 </script>

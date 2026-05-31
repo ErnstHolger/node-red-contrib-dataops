@@ -1,0 +1,245 @@
+<style>
+    .dataops-white-text { fill: #ffffff !important; }
+    .red-ui-palette-node[data-palette-type="dataops-shape"] .red-ui-palette-label { color: #ffffff !important; }
+</style>
+<script type="text/javascript">
+    RED.nodes.registerType('dataops-shape', {
+        category: 'data ops',
+        color: '#054E4E',
+        defaults: {
+            name:         { value: "" },
+            specScope:    { value: "global", required: true },
+            specKey:      { value: "", required: true },
+            fields:       { value: "[]" },
+            keys:         { value: "" },
+            tsFormat:     { value: "iso" },
+            questdb:      { value: false },
+            outputTopic:  { value: "" }
+        },
+        inputs: 1,
+        outputs: 2,
+        outputLabels: ["table", "error"],
+        icon: "font-awesome/fa-table",
+        label: function() { return this.name || "shape"; },
+        labelStyle: function() { return (this.name ? "node_label_italic" : "") + " dataops-white-text"; },
+        paletteLabel: "shape",
+        oneditprepare: function() {
+            var node = this;
+
+            // --- selection model: { topic: alias } (insertion order preserved) ---
+            function loadFields() {
+                var raw = $('#node-input-fields').val();
+                var arr = [];
+                try { arr = JSON.parse(raw || '[]'); } catch (e) { arr = []; }
+                if (!Array.isArray(arr)) arr = [];
+                // migrate legacy comma 'keys' if fields is empty
+                if (arr.length === 0) {
+                    var legacy = ($('#node-input-keys').val() || '').split(',').map(function(s){return s.trim();}).filter(Boolean);
+                    arr = legacy.map(function(t){ return { topic: t, alias: t }; });
+                }
+                var map = {};
+                arr.forEach(function(f){ if (f && f.topic) map[f.topic] = f.alias || f.topic; });
+                return { order: arr.map(function(f){return f.topic;}).filter(function(t){return t;}), map: map };
+            }
+            var sel = loadFields();
+
+            function saveFields() {
+                var out = sel.order.map(function(t){ return { topic: t, alias: sel.map[t] || t }; });
+                $('#node-input-fields').val(JSON.stringify(out));
+            }
+            saveFields(); // normalize on open (and persist any legacy migration)
+
+            var allKeys = [];   // last fetched topic list (unfiltered)
+            var lastNote = '';
+
+            function applyFilter() {
+                var q = ($('#dataops-key-filter').val() || '').toLowerCase().trim();
+                var subset = q ? allKeys.filter(function(k){ return k.toLowerCase().indexOf(q) !== -1; }) : allKeys;
+                renderList(subset, lastNote, allKeys.length);
+            }
+
+            function renderList(keys, note, total) {
+                var list = $('#dataops-key-list').empty();
+                if (!allKeys.length) {
+                    list.append($('<div>', {style:'color:#a00;font-size:0.85em;'}).text(note || 'No topics found.'));
+                    return;
+                }
+                if (!keys.length) {
+                    list.append($('<div>', {style:'color:#999;font-size:0.85em;'}).text('No topics match the filter.'));
+                    return;
+                }
+                // header
+                var hdr = $('<div>', {style:'display:flex;align-items:center;font-size:0.8em;color:#999;border-bottom:1px solid #eee;padding-bottom:3px;margin-bottom:3px;'});
+                $('<span>', {style:'flex:0 0 22px;'}).appendTo(hdr);
+                $('<span>', {style:'flex:1 1 auto;'}).text('topic').appendTo(hdr);
+                $('<span>', {style:'flex:0 0 130px;'}).text('alias').appendTo(hdr);
+                list.append(hdr);
+
+                keys.forEach(function(k){
+                    var id = 'dataops-key-' + k.replace(/[^a-zA-Z0-9_]/g,'_');
+                    var checked = sel.map.hasOwnProperty(k);
+                    var row = $('<div>', {style:'display:flex;align-items:center;margin:0 0 2px;'});
+
+                    var cb = $('<input>', {type:'checkbox', id:id, value:k, style:'width:auto;flex:0 0 22px;margin:0;'})
+                        .prop('checked', checked);
+                    var topicSpan = $('<label>', {for:id, style:'flex:1 1 auto;font-weight:normal;margin:0;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'})
+                        .attr('title', k).text(k);
+                    var alias = $('<input>', {type:'text', value: checked ? sel.map[k] : '', placeholder:'(alias)',
+                        style:'flex:0 0 130px;width:130px;box-sizing:border-box;'})
+                        .prop('disabled', !checked);
+
+                    cb.on('change', function(){
+                        if (this.checked) {
+                            if (sel.order.indexOf(k) === -1) sel.order.push(k);
+                            sel.map[k] = alias.val().trim() || k;
+                            alias.prop('disabled', false);
+                            if (!alias.val()) alias.val(k);
+                        } else {
+                            sel.order = sel.order.filter(function(t){return t!==k;});
+                            delete sel.map[k];
+                            alias.prop('disabled', true);
+                        }
+                        saveFields();
+                    });
+                    alias.on('input', function(){
+                        if (sel.map.hasOwnProperty(k)) { sel.map[k] = alias.val().trim() || k; saveFields(); }
+                    });
+
+                    row.append(cb).append(topicSpan).append(alias);
+                    list.append(row);
+                });
+            }
+
+            function refresh() {
+                var scope = $('#node-input-specScope').val();
+                var key = $('#node-input-specKey').val().trim();
+                var status = $('#dataops-key-status');
+                if (!key) { status.css('color','#a00').text('Enter a Spec Key first.'); return; }
+                status.css('color','#777').text('Loading…');
+                $.getJSON('dataops/shape/keys', { scope: scope, key: key, z: node.z })
+                    .done(function(data){
+                        allKeys = (data.keys || []).slice();
+                        lastNote = data.note || '';
+                        applyFilter();
+                        status.css('color','#393').text(allKeys.length + ' topics' + (data.note ? ' — ' + data.note : ''));
+                    })
+                    .fail(function(xhr){
+                        var m = (xhr.responseJSON && xhr.responseJSON.error) || 'request failed';
+                        status.css('color','#a00').text('Error: ' + m);
+                    });
+            }
+
+            $('#dataops-key-refresh').on('click', refresh);
+            $('#dataops-key-filter').on('input', applyFilter);
+        }
+    });
+</script>
+
+<script type="text/html" data-template-name="dataops-shape">
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+        <input type="text" id="node-input-name" placeholder="Name">
+    </div>
+    <div class="form-row">
+        <label for="node-input-specScope"><i class="fa fa-globe"></i> Scope</label>
+        <select id="node-input-specScope" style="width:70%;">
+            <option value="global">global</option>
+            <option value="flow">flow</option>
+        </select>
+    </div>
+    <div class="form-row">
+        <label for="node-input-specKey"><i class="fa fa-key"></i> Spec Key</label>
+        <input type="text" id="node-input-specKey" placeholder="(e.g. cache)">
+        <div class="form-tips">Context dictionary read from, at <code>&lt;scope&gt;.&lt;key&gt;</code> — the dict <code>dataops-in</code> writes.</div>
+    </div>
+    <!-- Hidden backing stores. fields = JSON [{topic,alias}]; keys = legacy comma list (migration only). -->
+    <input type="hidden" id="node-input-fields">
+    <input type="hidden" id="node-input-keys">
+    <div class="form-row" style="margin-bottom:4px;">
+        <label style="width:auto;"><i class="fa fa-list"></i> Keys</label>
+        <button type="button" id="dataops-key-refresh" class="red-ui-button" style="margin-left:4px;">
+            <i class="fa fa-refresh"></i> Refresh
+        </button>
+        <span id="dataops-key-status" style="margin-left:8px;font-size:0.85em;color:#777;"></span>
+    </div>
+    <div class="form-row">
+        <div class="form-tips" style="margin:0 0 6px;">Check the topics to include and give each an optional <b>alias</b> (output column name). Missing keys emit <code>null</code>. Click Refresh to list live topics.</div>
+    </div>
+    <div class="form-row" style="display:block;width:100%;margin-bottom:4px;">
+        <div style="position:relative;">
+            <i class="fa fa-filter" style="position:absolute;left:8px;top:8px;color:#aaa;"></i>
+            <input type="text" id="dataops-key-filter" placeholder="filter topics…"
+                style="width:100%;box-sizing:border-box;padding-left:26px;">
+        </div>
+    </div>
+    <div class="form-row" style="display:block;width:100%;">
+        <div id="dataops-key-list" style="display:block;width:100%;box-sizing:border-box;max-height:180px;overflow-y:auto;overflow-x:hidden;border:1px solid #ddd;border-radius:3px;padding:6px;background:#fafafa;">
+            <div style="color:#999;font-size:0.85em;">Set Scope + Spec Key above, then click Refresh to list live topics.</div>
+        </div>
+    </div>
+    <div class="form-row">
+        <label for="node-input-tsFormat"><i class="fa fa-clock-o"></i> Timestamp</label>
+        <select id="node-input-tsFormat" style="width:70%;">
+            <option value="iso">ISO 8601 string</option>
+            <option value="epoch">epoch ms (number)</option>
+        </select>
+    </div>
+    <div class="form-row">
+        <label style="width:auto;font-weight:normal;">
+            <input type="checkbox" id="node-input-questdb" style="width:auto;vertical-align:top;">
+            Format for QuestDB (<code>node-red-contrib-questdb</code>)
+        </label>
+        <div class="form-tips">Emit <code>msg.topic</code> = table name and <code>msg.payload = { columns: { name: { value, type } }, timestamp }</code> for the <code>questdb</code> node. Types map number→double, integer→long, boolean→boolean, string→string. Table = Topic (else <code>msg.topic</code> / node name). Timestamp in epoch ms.</div>
+    </div>
+    <div class="form-row">
+        <label for="node-input-outputTopic"><i class="fa fa-share"></i> Topic</label>
+        <input type="text" id="node-input-outputTopic" placeholder="(optional)">
+    </div>
+</script>
+
+<script type="text/html" data-help-name="dataops-shape">
+    <h3>Summary</h3>
+    <p>On <b>any</b> incoming message (e.g. from <code>dataops-cron</code> or any other node)
+    it reads the dictionary at <code>&lt;scope&gt;.&lt;key&gt;</code> and emits one JSON
+    object per selected topic.</p>
+
+    <h3>Output</h3>
+    <p><code>msg.payload</code> is an array of row objects (plus <code>msg.topic</code> if a Topic is set):</p>
+    <pre>[
+  { "name": "sine", "timestamp": "2026-05-30T11:42:49.000Z", "value": -100, "type": "number" },
+  { "name": "square", "timestamp": "2026-05-30T11:42:49.000Z", "value": 100, "type": "integer" }
+]</pre>
+    <dl class="message-properties">
+        <dt>name</dt><dd>The field's <i>alias</i> (falls back to the topic).</dd>
+        <dt>timestamp</dt><dd>The trigger's timestamp (<code>msg._epoch</code> / <code>msg.timestamp</code>), else now — as ISO string or epoch ms per the <i>Timestamp</i> setting.</dd>
+        <dt>value</dt><dd>The extracted scalar (<code>payload.value.value</code> → <code>payload.value</code> → <code>payload.v</code> → <code>payload</code>). Missing topic → <code>null</code>.</dd>
+        <dt>type</dt><dd>The stored record's <code>type</code> when present (canonical records carry it), else inferred (number / integer / string / boolean / object). Missing topic → <code>null</code>.</dd>
+    </dl>
+
+    <h3>QuestDB format</h3>
+    <p>With <b>Format for QuestDB</b> checked, the message is shaped for the
+    <code>node-red-contrib-questdb</code> node instead of the JSON array:</p>
+    <pre>msg.topic   = "sensors"              // table name
+msg.payload = {
+  columns: {
+    sine:   { value: -100.5, type: "double"  },
+    count:  { value: 42,     type: "long"    },
+    active: { value: true,   type: "boolean" },
+    label:  { value: "hi",   type: "string"  }
+  },
+  timestamp: 1780098169056             // epoch ms
+}</pre>
+    <ul>
+        <li><b>Table</b> = the node's Topic (else incoming <code>msg.topic</code>, else node name).</li>
+        <li><b>Columns</b> = one per selected topic; the shape <code>type</code> maps
+        number→<code>double</code>, integer→<code>long</code>, boolean→<code>boolean</code>,
+        string→<code>string</code>. Null values are omitted.</li>
+        <li><b>Timestamp</b> = trigger time in epoch ms (the questdb node converts to µs).</li>
+    </ul>
+
+    <h3>Outputs</h3>
+    <dl class="message-properties">
+        <dt>Output 1 — table</dt><dd>The shaped table.</dd>
+        <dt>Output 2 — error</dt><dd>Missing config or build errors.</dd>
+    </dl>
+</script>

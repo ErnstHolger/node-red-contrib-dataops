@@ -95,4 +95,4 @@ After any code change:
 
 ## License
 
-Personal Use License — see LICENSE file
+MIT License — see [LICENSE](LICENSE) file

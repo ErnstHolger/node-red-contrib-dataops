@@ -3,20 +3,21 @@
  * processing instructions (TOON in, TOON out).
  *
  * Workflow:
- *   1. Read cache entries.
+ *   1. Read cache samples from the Source context dictionary
+ *      (<sourceScope>.<sourceKey> — the shape dataops-in writes to context).
  *   2. Encode as TOON: samples[N]{topic,ts,payload}
  *   3. Call the Anthropic-compatible Messages API.
  *   4. Parse TOON response: specs[M]{topic,type,value,timestamp,quality}
- *   5. Optionally merge into a context dictionary.
+ *   5. Merge into the Destination context dictionary (<specScope>.<specKey>).
  *   6. Emit one msg per spec on output 1.
  *
  * Topic IS the canonical name — slashes preserved, no name field in the spec.
  */
 'use strict';
 
-const path = require('path');
-const SqliteStore = require('../lib/sqlite-store');
 const toon = require('../lib/toon');
+const { callAnthropicAPI } = require('../lib/anthropic');
+const { sanitizeKey } = require('../lib/ctxkey');
 
 module.exports = function(RED) {
 
@@ -84,65 +85,6 @@ module.exports = function(RED) {
         return { dict, format: 'toon' };
     }
 
-    /**
-     * Call the Anthropic Messages API with retry/backoff.
-     */
-    async function callAnthropicAPI(opts) {
-        const body = {
-            model: opts.model,
-            max_tokens: opts.maxTokens,
-            temperature: opts.temperature,
-            messages: [{ role: 'user', content: opts.userPrompt }]
-        };
-        if (opts.systemPrompt && opts.systemPrompt.trim()) {
-            body.system = opts.systemPrompt;
-        }
-        const bodyStr = JSON.stringify(body);
-        let lastError;
-
-        for (let attempt = 0; attempt < 3; attempt++) {
-            if (attempt > 0) {
-                await new Promise(r => setTimeout(r, Math.min(1000 * Math.pow(2, attempt), 8000)));
-            }
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 120000);
-            try {
-                const res = await fetch(opts.baseUrl + '/messages', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'x-api-key': opts.apiKey,
-                        'anthropic-version': '2023-06-01'
-                    },
-                    body: bodyStr,
-                    signal: controller.signal
-                });
-                clearTimeout(timeout);
-                if (!res.ok) {
-                    let errText = '';
-                    try { errText = await res.text(); } catch (_) { /* */ }
-                    const statusErr = new Error(`API ${res.status}: ${errText}`);
-                    if (res.status === 429 || res.status >= 500) { lastError = statusErr; continue; }
-                    throw statusErr;
-                }
-                const data = await res.json();
-                const textBlocks = data.content.filter(b => b.type === 'text').map(b => b.text);
-                return {
-                    content: data.content,
-                    text: textBlocks.join('\n') || JSON.stringify(data.content),
-                    model: data.model,
-                    usage: { input_tokens: data.usage.input_tokens, output_tokens: data.usage.output_tokens },
-                    stop_reason: data.stop_reason
-                };
-            } catch (err) {
-                clearTimeout(timeout);
-                lastError = err;
-                if (err.name === 'AbortError') lastError = new Error('API request timed out after 120s');
-            }
-        }
-        throw lastError || new Error('API request failed after 3 attempts');
-    }
-
     const DEFAULT_SYSTEM_PROMPT = [
         '# Role',
         'Generate per-topic processing instructions (JSONata expressions) that normalize Node-RED messages into canonical {timestamp, value, quality} records, plus a declared data type for each topic.',
@@ -153,6 +95,7 @@ module.exports = function(RED) {
         '    "<topic>",<ts>,<payload>',
         '    ...',
         'Each payload is either a bare primitive (number, boolean, null) or a quoted JSON-encoded string for objects, arrays, and complex strings.',
+        'IMPORTANT: object/array payloads are shown here as JSON strings only for transport. At runtime the message carries the real parsed object, so address its fields directly (e.g. payload.value) — do NOT wrap payload in $eval() or $fromJSON() to reparse it.',
         '',
         '# Output format — TOON',
         'Return a TOON table with exactly these columns in this order:',
@@ -183,10 +126,11 @@ module.exports = function(RED) {
         '- If payload is an object with .value: payload.value',
         '- If payload is an object with .v: payload.v',
         '- Otherwise pick the most plausible scalar field name from the sample.',
+        'Never use $eval() or $fromJSON() — the runtime payload is already a parsed object, not a JSON string.',
         'Quote the cell if the expression contains commas (e.g. JSONata function calls like "$substring(payload, 0, 5)").',
         '',
         '## timestamp (JSONata expression)',
-        '- payload has a string timestamp field: "$toMillis(payload.sourceTimestamp)"',
+        '- payload has a string timestamp field: "$toMillis(payload.sourceTimestamp)" ($toMillis here tolerates space-separated and non-colon-offset timestamps, not only strict ISO 8601)',
         '- payload has a numeric epoch field: payload.ts',
         '- msg-level timestamp visible: timestamp',
         '- otherwise: $millis()',
@@ -207,20 +151,19 @@ module.exports = function(RED) {
         RED.nodes.createNode(this, config);
         const node = this;
 
-        node.cacheConfig      = RED.nodes.getNode(config.cache);
         node.apiConfig        = RED.nodes.getNode(config.apiConfig);
         node.systemPrompt     = config.systemPrompt || DEFAULT_SYSTEM_PROMPT;
-        node.dbPath           = config.dbPath || path.join(RED.settings.userDir || process.cwd(), 'dataops.db');
-        node.specContextKey   = config.specContextKey   || '';
-        node.specContextScope = config.specContextScope || 'global';
+        // Source = context dict of cache samples to analyze.
+        node.sourceScope      = config.sourceScope || 'global';
+        node.sourceKey        = sanitizeKey(config.sourceKey);
+        // Destination = context dict the generated specs are merged into (consumed by dataops-transform).
+        // Fall back to legacy names for older flows.
+        node.specContextScope = config.specScope || config.specContextScope || 'global';
+        node.specContextKey   = sanitizeKey(config.specKey || config.specContextKey);
         node.maxSampleRows    = parseInt(config.maxSampleRows) || 250;
 
-        if (!node.cacheConfig) { node.status({ fill: 'red', shape: 'ring', text: 'no cache' }); return; }
-        if (!node.apiConfig)   { node.status({ fill: 'red', shape: 'ring', text: 'no API config' }); return; }
-
-        let store;
-        try { store = new SqliteStore(node.dbPath); }
-        catch (err) { node.status({ fill: 'yellow', shape: 'ring', text: 'DB init: ' + err.message }); store = null; }
+        if (!node.apiConfig) { node.status({ fill: 'red', shape: 'ring', text: 'no API config' }); return; }
+        if (!node.sourceKey) { node.status({ fill: 'yellow', shape: 'ring', text: 'no source key' }); }
 
         node.on('input', async function(msg, send, done) {
             send = send || function() { node.send.apply(node, arguments); };
@@ -228,11 +171,23 @@ module.exports = function(RED) {
             const startTime = Date.now();
 
             try {
-                const keys = node.cacheConfig.getKeys();
+                // Read source samples from the configured context dictionary:
+                //   <sourceScope>.<sourceKey> = { <key>: { payload, ts, metadata }, ... }
+                // (this is the shape dataops-in writes to context).
+                let sourceDict = {};
+                if (node.sourceKey) {
+                    const srcCtx = node.context()[node.sourceScope];
+                    const raw = srcCtx && srcCtx.get(node.sourceKey);
+                    if (raw && typeof raw === 'object' && !Array.isArray(raw)) sourceDict = raw;
+                }
                 const entries = [];
-                for (const key of keys) {
-                    const entry = node.cacheConfig.getValue(key);
-                    if (entry) entries.push({ key, payload: entry.payload, ts: entry.ts, metadata: entry.metadata });
+                for (const [key, entry] of Object.entries(sourceDict)) {
+                    if (entry && typeof entry === 'object' && 'payload' in entry) {
+                        entries.push({ key, payload: entry.payload, ts: entry.ts, metadata: entry.metadata });
+                    } else {
+                        // tolerate a bare-value dict { topic: value }
+                        entries.push({ key, payload: entry, ts: undefined, metadata: undefined });
+                    }
                 }
 
                 const toonInput = entriesToToon(entries, node.maxSampleRows);
@@ -268,20 +223,6 @@ module.exports = function(RED) {
                 });
 
                 const durationMs = Date.now() - startTime;
-
-                if (store) {
-                    try {
-                        store.insertRecord({
-                            node_id: node.id, timestamp: startTime, cache_size: entries.length,
-                            model: node.apiConfig.model, system_prompt: node.systemPrompt,
-                            user_prompt: userPrompt,
-                            response: JSON.stringify({ text: apiResult.text, blocks: apiResult.content.length }),
-                            input_tokens: apiResult.usage.input_tokens,
-                            output_tokens: apiResult.usage.output_tokens,
-                            duration_ms: durationMs
-                        });
-                    } catch (dbErr) { RED.log.warn(`[dataops-claude] SQLite write: ${dbErr.message}`); }
-                }
 
                 const claudeMeta = {
                     model: apiResult.model, usage: apiResult.usage,
@@ -358,7 +299,7 @@ module.exports = function(RED) {
             }
         });
 
-        node.on('close', function(done) { if (store) store.close(); done(); });
+        node.on('close', function(done) { done(); });
         node.status({ fill: 'green', shape: 'dot', text: 'ready' });
     }
 

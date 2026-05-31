@@ -215,7 +215,7 @@ When `includeQuality` is enabled, quality fields are included as `<name>_q`.
 - Fallback: JSON parse with markdown fence stripping (handles models that ignore TOON instructions)
 - Diagnostics: detects truncated responses (`stop_reason === 'max_tokens'`), thinking-only responses
 
-**Spec dictionary merge**: When `specContextKey` is set, the parsed specs are merged into the existing context dictionary (preserving entries for topics not in the current response). Each merged entry gets a `_meta` field with `generated_at`, `model`, and `format`.
+**Spec dictionary merge**: When `specKey` is set, the parsed specs are merged into the existing context dictionary (preserving entries for topics not in the current response). Each merged entry gets a `_meta` field with `generated_at`, `model`, and `format`.
 
 **SQLite history**: Every API call is recorded in the `config_history` table: `node_id`, `timestamp`, `cache_size`, `model`, `system_prompt`, `user_prompt`, `response`, `input_tokens`, `output_tokens`, `duration_ms`.
 

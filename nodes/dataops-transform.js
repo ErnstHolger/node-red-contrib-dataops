@@ -24,13 +24,14 @@
 'use strict';
 
 const { coerce, inferType } = require('../lib/coerce');
+const { sanitizeKey } = require('../lib/ctxkey');
 
 module.exports = function(RED) {
     function DataOpsTransformNode(config) {
         RED.nodes.createNode(this, config);
         const node = this;
 
-        node.specKey      = config.specKey      || 'dataopsSpecs';
+        node.specKey      = sanitizeKey(config.specKey) || 'dataopsSpecs';
         node.specScope    = config.specScope    || 'global';
         node.keyField     = config.keyField     || 'topic';
         node.fallbackMode = config.fallbackMode || 'heuristic';
@@ -42,7 +43,42 @@ module.exports = function(RED) {
         function prepare(expr) {
             if (expr === undefined || expr === null || expr === '') return null;
             const exprStr = typeof expr === 'string' ? expr : JSON.stringify(expr);
-            return RED.util.prepareJSONataExpression(exprStr, node);
+            const prepared = RED.util.prepareJSONataExpression(exprStr, node);
+            // Provide a safe JSON-parse helper: parse JSON strings, pass anything else
+            // through unchanged. Bound under both $fromJSON and $eval.
+            //
+            // The cache stores live objects, but the TOON samples sent to Claude render
+            // object payloads as JSON-encoded strings, so Claude often emits $eval(payload)
+            // to reparse them. JSONata's built-in $eval requires a string and throws
+            // 'Argument 1 of function "eval" does not match function signature' when the
+            // runtime payload is already an object/number. Overriding $eval with a
+            // tolerant parser keeps those generated specs (and any future slips) working.
+            const fromJSON = function(v) {
+                if (typeof v !== 'string') return v;
+                try { return JSON.parse(v); } catch (_) { return v; }
+            };
+            // Tolerant $toMillis: JSONata's built-in throws D3110 on anything that is not
+            // strict ISO 8601 (it rejects a space separator or a "+0100" offset without a
+            // colon). Real-world device timestamps such as "2026-05-30 20:54:56.056+0100"
+            // are common, so normalize then fall back to Date.parse, which accepts them.
+            // Numeric input is treated as already-epoch; unparseable input returns undefined
+            // so the caller's "no timestamp -> now" fallback kicks in instead of crashing.
+            const toMillis = function(v) {
+                if (v === undefined || v === null) return undefined;
+                if (typeof v === 'number') return v;
+                const s = String(v).trim();
+                // ISO with space instead of T, and "+HHMM"/"-HHMM" offset without a colon.
+                const iso = s.replace(' ', 'T').replace(/([+-]\d{2})(\d{2})$/, '$1:$2');
+                let ms = Date.parse(iso);
+                if (isNaN(ms)) ms = Date.parse(s);
+                return isNaN(ms) ? undefined : ms;
+            };
+            if (typeof prepared.assign === 'function') {
+                prepared.assign('fromJSON', fromJSON);
+                prepared.assign('eval', fromJSON);
+                prepared.assign('toMillis', toMillis);
+            }
+            return prepared;
         }
 
         function evalExpr(prepared, msg) {

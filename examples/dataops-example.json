@@ -1,12 +1,5 @@
 [
     {
-        "id": "cache-1",
-        "type": "dataops-cache",
-        "name": "Main Cache",
-        "maxEntries": 1000,
-        "ttl": 0
-    },
-    {
         "id": "inject-temp",
         "type": "inject",
         "name": "Inject Temperature",
@@ -22,8 +15,11 @@
         "id": "in-temp",
         "type": "dataops-in",
         "name": "Cache Temp",
-        "cache": "cache-1",
+        "specScope": "global",
+        "specKey": "dataopsCache",
         "keyField": "topic",
+        "maxEntries": 1000,
+        "ttl": 0,
         "wires": [["debug-temp"]]
     },
     {
@@ -49,15 +45,17 @@
         "id": "in-hum",
         "type": "dataops-in",
         "name": "Cache Hum",
-        "cache": "cache-1",
+        "specScope": "global",
+        "specKey": "dataopsCache",
         "keyField": "topic",
+        "maxEntries": 1000,
+        "ttl": 0,
         "wires": []
     },
     {
         "id": "combine-1",
         "type": "dataops-combine",
         "name": "Combine Sensors",
-        "cache": "cache-1",
         "inputMappings": [
             { "name": "temperature", "topic": "sensor/temperature" },
             { "name": "humidity", "topic": "sensor/humidity" }
