@@ -1,5 +1,5 @@
 /**
- * dataops-shape — Build a data table from a context dictionary.
+ * dataops-table — Build a data table from a context dictionary.
  *
  * On ANY incoming message (e.g. from dataops-cron or any node), reads the
  * dictionary at <specScope>.<specKey> (the dict dataops-in writes) and emits a
@@ -19,7 +19,7 @@
 'use strict';
 
 const { sanitizeKey } = require('../lib/ctxkey');
-const { inferType } = require('../lib/coerce');
+const { inferType, coerce } = require('../lib/coerce');
 
 module.exports = function(RED) {
 
@@ -58,7 +58,7 @@ module.exports = function(RED) {
     }
 
     // Map a shape `type` to a node-red-contrib-questdb column type.
-    //   number → double, integer → long, boolean → boolean, string/object → string.
+    //   integer/int/long/short → long, number/double/float/real → double, boolean → boolean, string/object → string.
     function questdbColType(type) {
         const t = (type || '').toLowerCase();
         if (t === 'integer' || t === 'int' || t === 'long' || t === 'short') return 'long';
@@ -74,7 +74,7 @@ module.exports = function(RED) {
         return (typeof value === 'object') ? JSON.stringify(value) : String(value);
     }
 
-    function DataOpsShapeNode(config) {
+    function DataOpsTableNode(config) {
         RED.nodes.createNode(this, config);
         const node = this;
 
@@ -131,6 +131,8 @@ module.exports = function(RED) {
                         value = extractValue(src);
                         const storedType = (src && typeof src === 'object' && typeof src.type === 'string' && src.type) ? src.type : null;
                         type = storedType || inferType(value);
+                        // Coerce value to declared type
+                        if (type) value = coerce(value, type);
                     }
                     return { name: f.alias || f.topic, timestamp: ts, value: value, type: type };
                 });
@@ -173,11 +175,11 @@ module.exports = function(RED) {
         node.on('close', function(done) { done(); });
     }
 
-    RED.nodes.registerType('dataops-shape', DataOpsShapeNode);
+    RED.nodes.registerType('dataops-table', DataOpsTableNode);
 
     // ---- Picker endpoint: list the top-level keys of <scope>.<specKey> ----
     // Query params: scope ("global"|"flow"), key (spec key), z (flow/tab id, for flow scope).
-    RED.httpAdmin.get('/dataops/shape/keys',
+    RED.httpAdmin.get('/dataops/table/keys',
         RED.auth.needsPermission('flows.read'),
         function(req, res) {
             const scope = req.query.scope === 'flow' ? 'flow' : 'global';

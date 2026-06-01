@@ -50,6 +50,7 @@ const GEN_FUNC = [
     "        quality: true",
     "    }",
     "}));",
+    "",
     "// Nested array: one inner array = a sequence of messages out of port 1.",
     "// (A flat array would be treated as one-per-output-port and drop all but the first.)",
     "return [msgs];"
@@ -79,7 +80,50 @@ const DEBUG = {
 // wire generator to debug as well
 GEN.wires = [['sim-mqtt', 'sim-debug']];
 
-const NEW_NODES = [TAB, INJECT, GEN, MQTT_OUT, DEBUG];
+// trigger/name generator: emits trigger (true/false every 10 min) and name (random ID on transition)
+const TRIGGER_FUNC = [
+    "const now = Date.now();",
+    "const sec = Math.floor(now / 1000);",
+    "const triggerPeriod = 600;  // 10 minutes",
+    "const cycleSec = sec % (2 * triggerPeriod);  // 0..1199",
+    "const trigger = cycleSec < triggerPeriod;",
+    "",
+    "// Detect false→true transition",
+    "const prevSec = context.get('prevSec') || sec;",
+    "const prevTrigger = context.get('prevTrigger');",
+    "const wasTransition = (prevTrigger === false && trigger === true);",
+    "",
+    "if (wasTransition) {",
+    "    context.set('randomId', Math.random().toString(36).substring(2, 10));",
+    "}",
+    "context.set('prevSec', sec);",
+    "context.set('prevTrigger', trigger);",
+    "const randomId = context.get('randomId') || 'none';",
+    "",
+    "const ts = new Date(now).toISOString();",
+    "const msgs = [",
+    "    {",
+    "        topic: 'testtopic/sim/trigger',",
+    "        payload: { value: trigger, timestamp: ts, quality: true }",
+    "    },",
+    "    {",
+    "        topic: 'testtopic/sim/name',",
+    "        payload: { value: randomId, timestamp: ts, quality: true }",
+    "    }",
+    "];",
+    "return [msgs];"
+].join('\n');
+
+const TRIGGER_GEN = {
+    id: 'sim-trigger-gen', type: 'function', z: TAB_ID, name: 'trigger/name',
+    func: TRIGGER_FUNC, outputs: 1, noerr: 0, initialize: '', finalize: '', libs: [],
+    x: 320, y: 280, wires: [['sim-mqtt']]
+};
+
+// wire inject to trigger generator as well
+INJECT.wires = [['sim-gen', 'sim-trigger-gen']];
+
+const NEW_NODES = [TAB, INJECT, GEN, TRIGGER_GEN, MQTT_OUT, DEBUG];
 
 // --- deploy --------------------------------------------------------------
 

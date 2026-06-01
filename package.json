@@ -31,13 +31,13 @@
       "dataops-combine": "nodes/dataops-combine.js",
       "dataops-split": "nodes/dataops-split.js",
       "dataops-cron": "nodes/dataops-cron.js",
-      "dataops-shape": "nodes/dataops-shape.js",
+      "dataops-table": "nodes/dataops-table.js",
+      "dataops-runtime": "nodes/dataops-runtime.js",
       "dataops-claude-api": "nodes/dataops-claude-api.js",
       "dataops-claude": "nodes/dataops-claude.js",
       "dataops-transform": "nodes/dataops-transform.js"
     }
   },
-  "dependencies": {},
   "engines": {
     "node": ">=18.0.0"
   },

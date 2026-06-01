@@ -123,11 +123,13 @@ module.exports = function(RED) {
                     value = p.v;                       // Sparkplug / compact
                 }
             }
+            const inferredType = inferType(value);
+            const coercedValue = coerce(value, inferredType);
             return {
                 name:      (topic !== undefined && topic !== null) ? String(topic) : '',
-                type:      inferType(value),
+                type:      inferredType,
                 timestamp: (typeof msg.timestamp === 'number') ? msg.timestamp : Date.now(),
-                value:     value,
+                value:     coercedValue,
                 quality:   (msg.quality !== undefined) ? msg.quality : true
             };
         }
