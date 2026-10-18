@@ -1,98 +1,68 @@
 # node-red-contrib-dataops
 
-Node-RED contrib package for data operations — cache, split, combine, transform, and AI-assisted message normalization.
+Node-RED contrib package for industrial data pipelines: context-dictionary cache, AI/heuristic normalization, second-resolution cron, run-time tracking.
+
+Scope (2.0): split, combine and table were removed because core Node-RED split/join/debug cover them. Do not re-add equivalents, and keep QuestDB-specific output out of this package. See [CHANGELOG.md](CHANGELOG.md).
+
+Full internals: [ARCHITECTURE.md](ARCHITECTURE.md). User docs: [README.md](README.md).
 
 ## Project Structure
 
 ```
 nodes/
-  dataops-cache.js/.html      - Config node: central message cache + event hub
-  dataops-in.js/.html         - Push messages to cache
-  dataops-combine.js/.html    - Buffer narrow records, emit wide flat dictionaries
-  dataops-split.js/.html      - Explode wide payloads into narrow normalized records
-  dataops-claude-api.js/.html - Config node: Anthropic API credentials + settings
-  dataops-claude.js/.html     - Send cache samples to Claude, harvest per-topic specs
-  dataops-transform.js/.html  - Apply per-topic JSONata specs to normalize messages
+  dataops-in.js/.html         - "cache": write msg.payload into a context dict (wrapped | flat)
+  dataops-transform.js/.html  - Apply per-topic JSONata specs → record or value output
+  dataops-cron.js/.html       - 6-field cron trigger (second resolution)
+  dataops-runtime.js/.html    - Run-flag runtime tracking, sampled rows
+  dataops-claude.js/.html     - Cache samples → Claude → spec dict
+  dataops-claude-api.js/.html - Config node (owns SDK client, complete()) + DataOps AI sidebar
 lib/
-  toon.js                     - Token-Oriented Object Notation encoder/decoder
-  coerce.js                   - Shared type coercion (used by split and transform)
-  sqlite-store.js             - SQLite wrapper for Claude API call history
-examples/
-  dataops-example.json        - Demo flow: inject → cache → combine → split → debug
+  values.js                   - extractValue heuristic, entry unwrap, isTruthy, parseFields, triggerDate
+  context.js                  - readDict/writeDict, /dataops/context/keys endpoint
+  jsonata.js                  - prepare (lenient $eval/$fromJSON/$toMillis), evaluate
+  anthropic.js                - @anthropic-ai/sdk client: streaming, retries, refusal → error
+  coerce.js / toon.js / ctxkey.js
+resources/dataops-ui.js       - Runtime editor field picker (served at resources/node-red-contrib-dataops/)
+test/                         - node:test; nodes run in a real runtime via node-red-node-test-helper
+examples/                     - Importable flows (all loaded by the test suite)
+scripts/                      - Dev-only helpers for a local Node-RED (simulation tab); not published
 ```
 
-## Development Commands
+## Commands
 
-### Local Development
-- `npm run deploy` - Link to Node-RED via npm link
-- `npm run deploy:patch` - Bump patch version + link
-- `npm run deploy:minor` - Bump minor version + link
-- `npm run deploy:major` - Bump major version + link
+- `npm run examples:install`: add every example as a disabled "DataOps: …" tab in the Node-RED at :1880 (re-run replaces them; `-- --enabled` to start them enabled).
+- `npm test`: the full suite. It needs no Node-RED instance and no API key. Run it after every change.
+- `npm run deploy` / `deploy:patch|minor|major`: (bump +) `npm link` into Node-RED, then restart Node-RED.
+- Release: bump `version` in package.json, commit, push tag `v<version>`. `publish.yml` runs `npm test`, checks tag = version, skips versions already on npm, and publishes via npm trusted publishing (OIDC; no NPM_TOKEN). Dist-tag: `-beta` → `beta`, `-rc` → `next`, else `latest`. Then refresh https://flows.nodered.org/add/node.
+- Local publish needs a 2FA security key on the npm account (npm no longer accepts new TOTP). The `files` whitelist in package.json limits what ships.
 
-### Publishing to npm + Node-RED Flow Library
-- `npm run publish:dry` - Test publish (no changes)
-- `npm run publish:patch` - Bump patch + publish
-- `npm run publish:minor` - Bump minor + publish
-- `npm run publish:major` - Bump major + publish
+## Architecture in brief
 
-After publish, resubmit at https://flows.nodered.org/add/node
+- **No shared runtime objects.** Nodes communicate through **context dictionaries** at `<scope>.<specKey>`.
+  - Cache dict, written by `dataops-in`: `{topic: {payload, ts, metadata, previous}}` (wrapped) or `{topic: payload}` (flat). Read by claude and runtime.
+  - Spec dict, written by `dataops-claude`: `{topic: {type, value, timestamp, quality, _meta}}`. Read by transform (default key `dataopsSpecs`).
+- **Transform output** (`outputFormat`): `record` (default) → `msg.payload = {name, type, timestamp, value, quality}`; `value` → `msg.payload = value` plus `msg.topic/timestamp/quality/type` (feeds core join key/value).
+- **Claude**: entries → TOON `samples[N]{topic,ts,payload}` → `apiConfig.complete()` → TOON `specs[M]{...}` (JSON fallback) → merged into spec dict.
+- **DataOps AI sidebar** → `POST /dataops/claude/generate-flow` → `FLOW_SYSTEM_PROMPT` in `dataops-claude-api.js`.
 
-### Testing
-- `npm test` - Run Playwright tests (headless)
-- `npm run test:headed` - Run tests with visible browser
-- `npm run test:ui` - Run with Playwright UI
+## Conventions
 
-**Note:** Tests require Node-RED running on localhost:1880
+- Shared logic goes in `lib/`. Never copy the value heuristic, context access, JSONata setup or field parsing into a node.
+- Top-level context keys go through `sanitizeKey()`. Entry keys (topics, including runtime trigger/label keys) are used verbatim.
+- Worker nodes have 2 outputs `[result, error]`. Errors go out as `{...msg, payload: {error}, _error: true}` plus `done(err)`. `dataops-in` has 1 output, and `dataops-cron` has no input.
+- Handlers use the `(msg, send, done)` signature with 0.x fallbacks.
+- Status: green ok, yellow missing config/heuristic, blue busy, red error. Palette category `'data ops'`.
+- Claude API: the default model is `claude-opus-5-5`. Never send `temperature` unless the user set it (current models 400). `fallbacks: "default"` is on by default. All requests go through `lib/anthropic.js`.
+- Tests: use `uniqueKey()` for context keys. Stub `helper.getNode(cfgId).complete` instead of calling the API.
 
-## Node-RED Linking
+## Adding or changing a node
 
-The package is linked via `npm link` for local development.
-
-After any code change:
-1. Run deploy command (or changes are immediate via symlink)
-2. Restart Node-RED to pick up changes
-
-## Architecture
-
-### Core Pipeline (4 nodes)
-
-- **dataops-cache**: Central hub storing `Map<key, {payload, ts, metadata, previous}>` with EventEmitter for pub/sub. In-memory primary store with debounced sync to Node-RED context for sidebar visibility and persistence across restarts. LRU eviction, TTL, reference-counted cleanup. HTTP admin endpoints for clear/stats/keys.
-- **dataops-in**: Publisher — extracts key from `msg.topic` (configurable), stores entire `msg.payload` in cache. Pass-through.
-- **dataops-combine**: Collects narrow normalized records (`{name, type, timestamp, value, quality}`) into a buffer. Three trigger modes: event (on every input), interval (fixed rate), quorum (when all expected names arrive). Emits a wide flat dictionary with optional quality fields.
-- **dataops-split**: Explodes a wide payload into N narrow normalized records. Configurable per-field JSON array with `{name, type, path}` and MQTT-style topic filter. Uses JSONata expressions for timestamp and quality. Produces canonical `{name, type, timestamp, value, quality}` records.
-
-### AI Pipeline (3 nodes + lib)
-
-- **dataops-claude-api**: Config node storing Anthropic API key (encrypted), model, base URL, max tokens, temperature.
-- **dataops-claude**: Reads all cache entries, encodes them as TOON, sends to Claude with retry/backoff (3 attempts, exponential to 8s, 120s timeout). Parses TOON response into a spec dictionary (`{topic: {type, value, timestamp, quality}}`). Optionally merges into Node-RED context for downstream `dataops-transform` nodes. Records all API calls in SQLite history. Emits one message per topic on output 1.
-- **dataops-transform**: Reads per-topic specs from Node-RED context, evaluates JSONata expressions against incoming messages, coerces values to declared types. Three fallback modes when no spec exists: heuristic (walks `payload.value.value` → `payload.value` → `payload.v` → `payload`), passthrough, error. Caches compiled JSONata expressions with invalidation on spec change.
-
-### Shared Libraries
-
-- **lib/toon.js**: Minimal tabular encoder/decoder. Format: `name[N]{col1,col2,...}:\n  <row>\n  ...`. Used for efficient LLM I/O.
-- **lib/coerce.js**: Type coercion (number, integer, boolean, string, object) with aliases and boolean string parsing. `inferType()` for runtime type detection.
-- **lib/sqlite-store.js**: Thin `better-sqlite3` wrapper with per-operation connections, WAL mode. Schema: `config_history` table tracking API calls.
-
-## Key Design Patterns
-
-- Config node (`dataops-cache`) pattern: shared `Map` + `EventEmitter` instances keyed by `node.id`, reference-counted for cleanup
-- Config node (`dataops-claude-api`) pattern: credentials stored in Node-RED credential store (`apiKey` type password)
-- Subscription pattern: `cache.subscribe(key, callback)` returns subscription ID, `cache.unsubscribe(id)` for cleanup
-- Context sync: debounced (500ms) sync from in-memory Map to global context for persistence
-- Spec dictionary: stored in Node-RED context (`global` or `flow`), keyed by topic, consumed by `dataops-transform`
-- JSONata expression caching: compiled expressions cached per topic, invalidated on spec content change
-- Node outputs: all worker nodes use 2 outputs (result + error)
-- All nodes follow `(msg, send, done)` signature for Node-RED 1.0+ compatibility
-- Status indicators: green (ready/active), yellow (warning/missing config), red (error), blue (API call in progress)
-
-## Adding New Nodes
-
-1. Create `nodes/node-name.js` (runtime logic)
-2. Create `nodes/node-name.html` (editor UI + help)
-3. Register in `package.json` under `node-red.nodes`
-4. Run deploy command
-5. Restart Node-RED
+1. `nodes/<name>.js` + `nodes/<name>.html` (editor template + help). Register it in `package.json` → `node-red.nodes`.
+2. **Update `FLOW_SYSTEM_PROMPT`** in `dataops-claude-api.js` (fields and output count). `test/lib.test.js` checks that every node is listed.
+3. Add tests to `test/nodes.test.js`, and an example if useful (examples are load-tested).
+4. Update README.md and ARCHITECTURE.md.
+5. `npm test`, then `npm run deploy` and restart Node-RED.
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) file
+MIT, see [LICENSE](LICENSE)

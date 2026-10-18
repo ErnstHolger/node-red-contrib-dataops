@@ -1,71 +1,80 @@
 name: Publish to npm
 
+# Release: bump "version" in package.json, commit, then push a matching tag:
+#   git tag v2.1.0 && git push origin v2.1.0
+#
+# Publishing uses npm trusted publishing (OIDC): no NPM_TOKEN secret and no 2FA
+# prompt. One-time setup on npmjs.com → package → Settings → Trusted Publisher:
+#   GitHub Actions · ErnstHolger/node-red-contrib-dataops · workflow publish.yml
+#
+# Versions already on npm are skipped, so re-running or re-tagging is harmless.
+
 on:
   push:
     tags:
       - 'v*'
-  release:
-    types: [published]
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version bump (patch, minor, major, or skip)'
-        required: false
-        default: 'skip'
-        type: choice
-        options:
-          - skip
-          - patch
-          - minor
-          - major
+
+permissions:
+  contents: read
+  id-token: write   # required for trusted publishing (and npm provenance)
 
 jobs:
-  check:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
+          cache: npm
 
-      - name: Dry-run publish check
+      - name: Install
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Check package contents
         run: npm publish --dry-run
 
   publish:
-    needs: check
+    needs: test
     runs-on: ubuntu-latest
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'   # ships npm 11, which supports trusted publishing
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Determine npm dist-tag
-        id: tag
+      - name: Resolve version and dist-tag
+        id: meta
         run: |
+          NAME=$(node -p "require('./package.json').name")
           VERSION=$(node -p "require('./package.json').version")
-          if [[ "$VERSION" == *"-beta"* ]]; then
-            echo "dist_tag=beta" >> $GITHUB_OUTPUT
-          elif [[ "$VERSION" == *"-rc"* ]]; then
-            echo "dist_tag=next" >> $GITHUB_OUTPUT
-          else
-            echo "dist_tag=latest" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          # A pushed tag must match package.json, e.g. v2.0.0 ↔ 2.0.0.
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" != "v$VERSION" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $VERSION"
+            exit 1
           fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Bump version (workflow_dispatch only)
-        if: github.event_name == 'workflow_dispatch' && inputs.version != 'skip'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          npm version ${{ inputs.version }}
-          git push --follow-tags
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "::notice::$NAME@$VERSION is already on npm; skipping publish"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Publish to npm
-        run: npm publish --tag ${{ steps.tag.outputs.dist_tag }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          if [[ "$VERSION" == *"-beta"* ]]; then TAG=beta
+          elif [[ "$VERSION" == *"-rc"* ]]; then TAG=next
+          else TAG=latest; fi
+          echo "dist_tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Publish
+        if: steps.meta.outputs.skip == 'false'
+        run: npm publish --tag ${{ steps.meta.outputs.dist_tag }}

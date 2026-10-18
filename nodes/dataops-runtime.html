@@ -1,3 +1,4 @@
+<script type="text/javascript" src="resources/node-red-contrib-dataops/dataops-ui.js"></script>
 <style>
     .dataops-white-text { fill: #ffffff !important; }
     .red-ui-palette-node[data-palette-type="dataops-runtime"] .red-ui-palette-label { color: #ffffff !important; }
@@ -11,8 +12,8 @@
             specScope:    { value: "global", required: true },
             specKey:      { value: "", required: true },
             triggerKey:   { value: "", required: true },
-            labelKey:     { value: "", required: true },
-            sampling:     { value: "1", required: true },
+            labelKey:     { value: "" },
+            sampling:     { value: "1", required: true, validate: RED.validators.number() },
             fields:       { value: "[]" },
             keys:         { value: "" },
             tsFormat:     { value: "iso" },
@@ -20,116 +21,13 @@
         },
         inputs: 1,
         outputs: 2,
-        outputLabels: ["table", "error"],
+        outputLabels: ["row", "error"],
         icon: "font-awesome/fa-tachometer",
         label: function() { return this.name || "runtime"; },
         labelStyle: function() { return (this.name ? "node_label_italic" : "") + " dataops-white-text"; },
         paletteLabel: "runtime",
         oneditprepare: function() {
-            var node = this;
-
-            function loadFields() {
-                var raw = $('#node-input-fields').val();
-                var arr = [];
-                try { arr = JSON.parse(raw || '[]'); } catch (e) { arr = []; }
-                if (!Array.isArray(arr)) arr = [];
-                if (arr.length === 0) {
-                    var legacy = ($('#node-input-keys').val() || '').split(',').map(function(s){return s.trim();}).filter(Boolean);
-                    arr = legacy.map(function(t){ return { topic: t, alias: t }; });
-                }
-                var map = {};
-                arr.forEach(function(f){ if (f && f.topic) map[f.topic] = f.alias || f.topic; });
-                return { order: arr.map(function(f){return f.topic;}).filter(function(t){return t;}), map: map };
-            }
-            var sel = loadFields();
-
-            function saveFields() {
-                var out = sel.order.map(function(t){ return { topic: t, alias: sel.map[t] || t }; });
-                $('#node-input-fields').val(JSON.stringify(out));
-            }
-            saveFields();
-
-            var allKeys = [];
-            var lastNote = '';
-
-            function applyFilter() {
-                var q = ($('#dataops-key-filter').val() || '').toLowerCase().trim();
-                var subset = q ? allKeys.filter(function(k){ return k.toLowerCase().indexOf(q) !== -1; }) : allKeys;
-                renderList(subset, lastNote, allKeys.length);
-            }
-
-            function renderList(keys, note, total) {
-                var list = $('#dataops-key-list').empty();
-                if (!allKeys.length) {
-                    list.append($('<div>', {style:'color:#a00;font-size:0.85em;'}).text(note || 'No topics found.'));
-                    return;
-                }
-                if (!keys.length) {
-                    list.append($('<div>', {style:'color:#999;font-size:0.85em;'}).text('No topics match the filter.'));
-                    return;
-                }
-                var hdr = $('<div>', {style:'display:flex;align-items:center;font-size:0.8em;color:#999;border-bottom:1px solid #eee;padding-bottom:3px;margin-bottom:3px;'});
-                $('<span>', {style:'flex:0 0 22px;'}).appendTo(hdr);
-                $('<span>', {style:'flex:1 1 auto;'}).text('topic').appendTo(hdr);
-                $('<span>', {style:'flex:0 0 130px;'}).text('alias').appendTo(hdr);
-                list.append(hdr);
-
-                keys.forEach(function(k){
-                    var id = 'dataops-key-' + k.replace(/[^a-zA-Z0-9_]/g,'_');
-                    var checked = sel.map.hasOwnProperty(k);
-                    var row = $('<div>', {style:'display:flex;align-items:center;margin:0 0 2px;'});
-
-                    var cb = $('<input>', {type:'checkbox', id:id, value:k, style:'width:auto;flex:0 0 22px;margin:0;'})
-                        .prop('checked', checked);
-                    var topicSpan = $('<label>', {for:id, style:'flex:1 1 auto;font-weight:normal;margin:0;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'})
-                        .attr('title', k).text(k);
-                    var alias = $('<input>', {type:'text', value: checked ? sel.map[k] : '', placeholder:'(alias)',
-                        style:'flex:0 0 130px;width:130px;box-sizing:border-box;'})
-                        .prop('disabled', !checked);
-
-                    cb.on('change', function(){
-                        if (this.checked) {
-                            if (sel.order.indexOf(k) === -1) sel.order.push(k);
-                            sel.map[k] = alias.val().trim() || k;
-                            alias.prop('disabled', false);
-                            if (!alias.val()) alias.val(k);
-                        } else {
-                            sel.order = sel.order.filter(function(t){return t!==k;});
-                            delete sel.map[k];
-                            alias.prop('disabled', true);
-                        }
-                        saveFields();
-                    });
-                    alias.on('input', function(){
-                        if (sel.map.hasOwnProperty(k)) { sel.map[k] = alias.val().trim() || k; saveFields(); }
-                    });
-
-                    row.append(cb).append(topicSpan).append(alias);
-                    list.append(row);
-                });
-            }
-
-            function refresh() {
-                var scope = $('#node-input-specScope').val();
-                var key = $('#node-input-specKey').val().trim();
-                var status = $('#dataops-key-status');
-                if (!key) { status.css('color','#a00').text('Enter a Spec Key first.'); return; }
-                status.css('color','#777').text('Loading…');
-                $.getJSON('dataops/runtime/keys', { scope: scope, key: key, z: node.z })
-                    .done(function(data){
-                        allKeys = (data.keys || []).slice();
-                        lastNote = data.note || '';
-                        applyFilter();
-                        status.css('color','#393').text(allKeys.length + ' topics' + (data.note ? ' — ' + data.note : ''));
-                    })
-                    .fail(function(xhr){
-                        var m = (xhr.responseJSON && xhr.responseJSON.error) || 'request failed';
-                        status.css('color','#a00').text('Error: ' + m);
-                    });
-            }
-
-            $('#dataops-key-refresh').on('click', refresh);
-            $('#dataops-key-filter').on('input', applyFilter);
+            DataOpsUI.fieldPicker(this);
         }
     });
 </script>
@@ -154,17 +52,17 @@
     <div class="form-row">
         <label for="node-input-triggerKey"><i class="fa fa-bolt"></i> Trigger Key</label>
         <input type="text" id="node-input-triggerKey" placeholder="(e.g. active)">
-        <div class="form-tips">Dictionary key to read the trigger value from (0/1 or true/false).</div>
+        <div class="form-tips">Topic in the dictionary holding the run flag (true/false, 1/0, on/off). Wrapped and canonical-record entries are unwrapped to their value.</div>
     </div>
     <div class="form-row">
         <label for="node-input-labelKey"><i class="fa fa-bookmark"></i> Label Key</label>
         <input type="text" id="node-input-labelKey" placeholder="(e.g. mode)">
-        <div class="form-tips">Dictionary key to read the label value from.</div>
+        <div class="form-tips">Optional topic in the dictionary whose value is emitted as <code>label</code> (e.g. batch id or mode).</div>
     </div>
     <div class="form-row">
         <label for="node-input-sampling"><i class="fa fa-hourglass-half"></i> Sampling (seconds)</label>
         <input type="number" id="node-input-sampling" min="0" step="0.1" placeholder="1">
-        <div class="form-tips">Minimum interval (seconds) between emissions when trigger is true.</div>
+        <div class="form-tips">While the trigger is true: first row after this many seconds, then at most one row per interval. <code>0</code> = every input.</div>
     </div>
     <input type="hidden" id="node-input-fields">
     <input type="hidden" id="node-input-keys">
@@ -205,15 +103,18 @@
 
 <script type="text/html" data-help-name="dataops-runtime">
     <h3>Summary</h3>
-    <p>On any incoming message, reads the dictionary at <code>&lt;scope&gt;.&lt;key&gt;</code> and emits a row
-    if the trigger is true AND the sampling interval has passed since the last true transition.</p>
+    <p>Tracks how long a run flag has been active. On each incoming message (typically from <code>dataops-cron</code>)
+    it reads the dictionary at <code>&lt;scope&gt;.&lt;key&gt;</code> and, while the trigger is true, emits sampled rows
+    with the elapsed runtime, a label and the selected data fields.</p>
 
-    <h3>Trigger & Sampling</h3>
-    <p>The node monitors <code>dict[Trigger Key]</code> for transitions:</p>
+    <h3>Trigger &amp; Sampling</h3>
     <ul>
-        <li><b>Trigger</b> can be 0/1, true/false, or truthy/falsy</li>
-        <li>On false→true transition, <code>lastTrueTime</code> is recorded</li>
-        <li>Emission only occurs if: trigger is true AND <code>now >= lastTrueTime + sampling_seconds</code></li>
+        <li>The trigger value is <code>dict[Trigger Key]</code>, unwrapped (<code>payload.value.value</code> → <code>.value</code> → <code>.v</code>).
+            True values: <code>true</code>, non-zero numbers, <code>"true"</code>/<code>"1"</code>/<code>"yes"</code>/<code>"on"</code>.</li>
+        <li>On a false→true transition the start time is recorded; <code>runtime</code> counts from there.</li>
+        <li>The first row is emitted once <i>Sampling</i> seconds have elapsed, then at most one row per <i>Sampling</i> seconds while the trigger stays true.</li>
+        <li>Times come from the trigger message (<code>msg._epoch</code> / <code>msg.timestamp</code>), else the current time.</li>
+        <li>The start time is kept in memory; a redeploy starts a new run.</li>
     </ul>
 
     <h3>Output</h3>
@@ -230,7 +131,7 @@
 
     <h3>Outputs</h3>
     <dl class="message-properties">
-        <dt>Output 1 — table</dt><dd>The row (if emission criteria are met), or empty if not triggered.</dd>
+        <dt>Output 1 — row</dt><dd>The row, when the trigger is true and the sampling interval has elapsed. Nothing is sent otherwise.</dd>
         <dt>Output 2 — error</dt><dd>Missing config or build errors.</dd>
     </dl>
 </script>

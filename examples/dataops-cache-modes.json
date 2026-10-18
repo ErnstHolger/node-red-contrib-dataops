@@ -1,0 +1,216 @@
+[
+    {
+        "id": "cm-c",
+        "type": "comment",
+        "name": "Cache modes: wrapped vs flat, LRU, TTL",
+        "info": "Click **send sensor/1..4** a few times, then click **show caches**.\n\n- **wrapped** (`demoWrapped`, TTL 30 s): stores `{payload, ts, metadata, previous}`. Entries older than 30 s are purged. Use this shape as the `dataops-claude` source.\n- **flat** (`demoFlat`, max 3 entries): stores the payload as-is. Writing a 4th topic evicts the least-recently written one. Use this shape for `dataops-runtime`.\n\nYou can also browse both under **Context → Global** in the sidebar.",
+        "x": 160,
+        "y": 40,
+        "wires": []
+    },
+    {
+        "id": "cm-s1",
+        "type": "inject",
+        "name": "send sensor/1",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.5,
+        "topic": "sensor/1",
+        "payload": "",
+        "payloadType": "date",
+        "x": 130,
+        "y": 100,
+        "wires": [
+            [
+                "cm-wrapped",
+                "cm-flat"
+            ]
+        ]
+    },
+    {
+        "id": "cm-s2",
+        "type": "inject",
+        "name": "send sensor/2",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.5,
+        "topic": "sensor/2",
+        "payload": "",
+        "payloadType": "date",
+        "x": 130,
+        "y": 140,
+        "wires": [
+            [
+                "cm-wrapped",
+                "cm-flat"
+            ]
+        ]
+    },
+    {
+        "id": "cm-s3",
+        "type": "inject",
+        "name": "send sensor/3",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.5,
+        "topic": "sensor/3",
+        "payload": "",
+        "payloadType": "date",
+        "x": 130,
+        "y": 180,
+        "wires": [
+            [
+                "cm-wrapped",
+                "cm-flat"
+            ]
+        ]
+    },
+    {
+        "id": "cm-s4",
+        "type": "inject",
+        "name": "send sensor/4",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.5,
+        "topic": "sensor/4",
+        "payload": "",
+        "payloadType": "date",
+        "x": 130,
+        "y": 220,
+        "wires": [
+            [
+                "cm-wrapped",
+                "cm-flat"
+            ]
+        ]
+    },
+    {
+        "id": "cm-wrapped",
+        "type": "dataops-in",
+        "name": "wrapped, TTL 30 s",
+        "specScope": "global",
+        "specKey": "demoWrapped",
+        "keyField": "topic",
+        "storeMode": "wrapped",
+        "maxEntries": 0,
+        "ttl": 30000,
+        "x": 380,
+        "y": 140,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "cm-flat",
+        "type": "dataops-in",
+        "name": "flat, max 3",
+        "specScope": "global",
+        "specKey": "demoFlat",
+        "keyField": "topic",
+        "storeMode": "flat",
+        "maxEntries": 3,
+        "ttl": 0,
+        "x": 370,
+        "y": 200,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "cm-show",
+        "type": "inject",
+        "name": "show caches",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.5,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 130,
+        "y": 300,
+        "wires": [
+            [
+                "cm-read"
+            ]
+        ]
+    },
+    {
+        "id": "cm-read",
+        "type": "function",
+        "name": "read both dicts",
+        "func": "// Read both cache dictionaries so you can compare their shapes.\nmsg.payload = {\n    wrapped: global.get(\"demoWrapped\"),\n    flat:    global.get(\"demoFlat\")\n};\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 330,
+        "y": 300,
+        "wires": [
+            [
+                "cm-dbg"
+            ]
+        ]
+    },
+    {
+        "id": "cm-dbg",
+        "type": "debug",
+        "name": "caches",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "x": 530,
+        "y": 300,
+        "wires": []
+    }
+]

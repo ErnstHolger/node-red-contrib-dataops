@@ -1,0 +1,246 @@
+[
+    {
+        "id": "ms-c",
+        "type": "comment",
+        "name": "Hand-written transform specs",
+        "info": "You don't need Claude to use `dataops-transform`. A spec dictionary is plain JSON in context.\n\n1. **load specs** writes three specs to `global.manualSpecs` on deploy.\n2. Click the sample injects:\n   - The temperature timestamp uses `\"2026-05-30 20:54:56.056+0100\"`, which the built-in `$toMillis` rejects and the dataops one accepts.\n   - The second temperature sample has a bad OPC UA status code, so its quality is `false`.\n   - The level arrives as the string `\"42.7\"` and is coerced to integer `42`.\n   - The unknown topic goes to the error output (fallback mode = error).\n\nEdit the specs in the change node to experiment.",
+        "x": 160,
+        "y": 40,
+        "wires": []
+    },
+    {
+        "id": "ms-load",
+        "type": "inject",
+        "name": "load specs",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": true,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 130,
+        "y": 100,
+        "wires": [
+            [
+                "ms-set"
+            ]
+        ]
+    },
+    {
+        "id": "ms-set",
+        "type": "change",
+        "name": "global.manualSpecs",
+        "rules": [
+            {
+                "t": "set",
+                "p": "manualSpecs",
+                "pt": "global",
+                "to": "{\n  \"plant/boiler/temp\": {\n    \"type\": \"number\",\n    \"value\": \"payload.value.value\",\n    \"timestamp\": \"$toMillis(payload.sourceTimestamp)\",\n    \"quality\": \"payload.statusCode = 0\"\n  },\n  \"plant/boiler/state\": {\n    \"type\": \"boolean\",\n    \"value\": \"payload.state = 'RUNNING'\",\n    \"timestamp\": \"payload.ts\",\n    \"quality\": \"true\"\n  },\n  \"plant/boiler/level\": {\n    \"type\": \"integer\",\n    \"value\": \"payload\",\n    \"timestamp\": \"$millis()\",\n    \"quality\": \"true\"\n  }\n}",
+                "tot": "json"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 340,
+        "y": 100,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "ms-temp-ok",
+        "type": "inject",
+        "name": "temp (good)",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.5,
+        "topic": "plant/boiler/temp",
+        "payload": "{\"value\":{\"value\":182.4,\"dataType\":\"Double\"},\"sourceTimestamp\":\"2026-05-30 20:54:56.056+0100\",\"statusCode\":0}",
+        "payloadType": "json",
+        "x": 130,
+        "y": 180,
+        "wires": [
+            [
+                "ms-transform"
+            ]
+        ]
+    },
+    {
+        "id": "ms-temp-bad",
+        "type": "inject",
+        "name": "temp (bad status)",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.5,
+        "topic": "plant/boiler/temp",
+        "payload": "{\"value\":{\"value\":0,\"dataType\":\"Double\"},\"sourceTimestamp\":\"2026-05-30T20:55:00Z\",\"statusCode\":2150891520}",
+        "payloadType": "json",
+        "x": 150,
+        "y": 220,
+        "wires": [
+            [
+                "ms-transform"
+            ]
+        ]
+    },
+    {
+        "id": "ms-state",
+        "type": "inject",
+        "name": "state",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.5,
+        "topic": "plant/boiler/state",
+        "payload": "{\"state\":\"RUNNING\",\"ts\":1780000000000}",
+        "payloadType": "json",
+        "x": 110,
+        "y": 260,
+        "wires": [
+            [
+                "ms-transform"
+            ]
+        ]
+    },
+    {
+        "id": "ms-level",
+        "type": "inject",
+        "name": "level \"42.7\"",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.5,
+        "topic": "plant/boiler/level",
+        "payload": "42.7",
+        "payloadType": "str",
+        "x": 120,
+        "y": 300,
+        "wires": [
+            [
+                "ms-transform"
+            ]
+        ]
+    },
+    {
+        "id": "ms-unknown",
+        "type": "inject",
+        "name": "unknown topic",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.5,
+        "topic": "plant/boiler/unknown",
+        "payload": "1",
+        "payloadType": "num",
+        "x": 130,
+        "y": 340,
+        "wires": [
+            [
+                "ms-transform"
+            ]
+        ]
+    },
+    {
+        "id": "ms-transform",
+        "type": "dataops-transform",
+        "name": "apply manualSpecs",
+        "specScope": "global",
+        "specKey": "manualSpecs",
+        "keyField": "topic",
+        "fallbackMode": "error",
+        "x": 380,
+        "y": 260,
+        "wires": [
+            [
+                "ms-dbg"
+            ],
+            [
+                "ms-err"
+            ]
+        ]
+    },
+    {
+        "id": "ms-dbg",
+        "type": "debug",
+        "name": "canonical records",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "x": 610,
+        "y": 240,
+        "wires": []
+    },
+    {
+        "id": "ms-err",
+        "type": "debug",
+        "name": "no spec / errors",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 610,
+        "y": 300,
+        "wires": []
+    }
+]

@@ -2,43 +2,67 @@
 
 ## Overview
 
-DataOps is a Node-RED contrib package for building data pipeline workflows. The core idea: stream messages into a central cache, then normalize, split, and combine them using either configuration-driven rules or AI-generated processing specifications. All worker nodes operate on a **canonical narrow record shape** and can be chained to form complete pipelines.
+DataOps is a Node-RED contrib package for building data pipelines for industrial and IIoT data. Nodes share state through **context dictionaries**. A context dictionary is a plain object stored in Node-RED `global` or `flow` context at a configurable **Spec Key**. Two kinds of dictionary flow through a pipeline:
+
+| Dictionary | Written by | Read by | Shape |
+|---|---|---|---|
+| **Cache** (samples or latest values) | `dataops-in` | `dataops-claude` (source), `dataops-runtime` | `{ <topic>: entry }` |
+| **Spec** (per-topic normalization rules) | `dataops-claude` (or by hand) | `dataops-transform` | `{ <topic>: {type, value, timestamp, quality} }` |
+
+Context is visible in the editor's Context sidebar and persists across restarts if a persistent context store is configured. Nodes have no other shared runtime state: no cache config node, no EventEmitter and no pub/sub.
 
 ```
-┌──────────┐    ┌─────────────────┐    ┌──────────┐
-│ dataops-in │──▶│  dataops-cache   │◀───│ dataops-in │
-└──────────┘    │  (config node)   │    └──────────┘
-                │  pub/sub hub     │
-                └────────┬────────┘
-                         │
-              ┌──────────┴─────────────┐
-              │                        │
-              ▼                        ▼
-      ┌──────────────┐        ┌─────────────────┐
-      │dataops-claude │        │  dataops-split   │
-      │ (AI spec gen) │        │ (wide → narrow)  │
-      └──────┬───────┘        └────────┬────────┘
-             │ context                  │ canonical
-             │ (spec dict)              │ records
-             ▼                          ▼
-      ┌──────────────┐        ┌──────────────────┐
-      │dataops-transform│      │  dataops-combine  │
-      │ (apply specs)  │──────▶│ (narrow → wide)   │
-      └──────────────┘        └────────┬──────────┘
-                                       │
-                                       ▼
-                              [database / downstream]
+                 ┌─────────────┐
+ [mqtt/opcua] ──▶│ dataops-in  │── writes ──▶ cache dict (<scope>.<specKey>)
+                 └─────────────┘                    │
+                                     ┌──────────────┴──────┐
+                                     ▼                     ▼
+ [cron/inject] ──▶ ┌──────────────────┐        ┌─────────────────┐
+                   │  dataops-claude  │        │ dataops-runtime │──▶ sampled rows
+                   └────────┬─────────┘        └─────────────────┘
+                            │ writes spec dict
+                            ▼
+ [live msgs] ──▶ ┌──────────────────┐
+                 │dataops-transform │──▶ record or value ──▶ core join / debug / database
+                 └──────────────────┘
 ```
 
-Two config nodes support the pipeline:
-- **dataops-cache** — shared in-memory cache + pub/sub event hub
-- **dataops-claude-api** — Anthropic API credentials + model settings
+`dataops-cron` is a trigger source with second resolution. It drives `dataops-runtime` and `dataops-claude` on a schedule. Merging and exploding messages is left to the core **join** and **split** nodes, and inspection to the core **debug** node. The package removed its own split, combine and table nodes in 2.0.
+
+The one config node is **dataops-claude-api**. It holds the Claude API settings, owns the SDK client, and hosts the DataOps AI sidebar endpoints.
+
+All nodes appear in the palette category **data ops**. Palette labels: `cache` (dataops-in), `transform`, `claude`, `cron`, `runtime`.
 
 ---
 
-## Canonical Record Shape
+## Module Layout
 
-All worker nodes (split, transform, combine) share a common narrow record format:
+```
+nodes/          one .js (runtime) + .html (editor + help) per node
+lib/
+  values.js     payload heuristic, entry unwrapping, truthiness, field lists, trigger time
+  context.js    read/write context dictionaries; /dataops/context/keys admin endpoint
+  jsonata.js    compile with lenient $eval/$fromJSON/$toMillis; evaluate helpers
+  anthropic.js  Claude client on @anthropic-ai/sdk (streaming, retries, refusal handling)
+  coerce.js     coerce(value, type) / inferType(value)
+  toon.js       TOON tabular encoder/decoder
+  ctxkey.js     sanitizeKey()
+resources/
+  dataops-ui.js editor code for the runtime node's topic/alias picker, served by Node-RED
+test/           node:test suites; nodes run in a real runtime via node-red-node-test-helper
+examples/       importable flows (each is loaded by the test suite)
+scripts/        dev-only helpers for a local Node-RED (not published)
+```
+
+Logic that more than one node needs lives in `lib/`. Nodes contain only their own behavior.
+
+---
+
+## Transform Output
+
+`dataops-transform` emits one of two shapes, chosen by its **Output** setting.
+
+**record** (default): `msg.payload` is the canonical record:
 
 ```js
 {
@@ -50,340 +74,223 @@ All worker nodes (split, transform, combine) share a common narrow record format
 }
 ```
 
-- **split** produces these from wide payloads (one per configured field)
-- **transform** produces these by applying JSONata specs (one per input message)
-- **combine** consumes these and assembles them into wide flat dictionaries
+**value**: `msg.payload = value`, with `msg.topic = name`, `msg.timestamp`, `msg.quality` and `msg.type`. This is the idiomatic Node-RED shape and feeds the core join node in key/value mode directly.
+
+Both shapes are understood by `entryValue()` when cached with `dataops-in` (flat).
+
+---
+
+## Shared Conventions
+
+**Context keys.** Every top-level key a user types (Spec Key, Source Key) goes through `sanitizeKey()`: it is trimmed and every character outside `[A-Za-z0-9_]` becomes `_`. Node-RED's `context.get/set` parses keys as property expressions, so `"my cache"` or `"plant.a"` would otherwise throw. Every node applies the same function, so they all resolve the same dictionary.
+
+**Entry keys** inside a dictionary (topics such as `plant/HWS/temp`) are stored and looked up verbatim. This includes `dataops-runtime`'s Trigger and Label keys.
+
+**Scope.** `lib/context.js` maps `'flow'` to flow context and anything else to global.
+
+**Value heuristic.** `lib/values.extractValue` is the single implementation, used by transform (fallback) and runtime: `payload.value.value` (OPC UA Variant) → `payload.value` (Kepware / canonical record) → `payload.v` (Sparkplug B) → `payload`. `entryValue(entry)` first strips a wrapped `{payload, ts, …}` envelope.
+
+**Message key.** `keyField` accepts `topic` or `msg.topic` in `dataops-in` and `dataops-transform`.
+
+**Trigger time.** `dataops-runtime` takes time from the trigger message: `msg._epoch` (set by dataops-cron), then `msg.timestamp` (ISO or epoch), then now.
+
+**Outputs.** Worker nodes have two outputs `[result, error]`. Errors go out as `{...msg, payload: {error, ...}, _error: true}` and are also reported through `done(err)`, so Catch nodes see them. `dataops-in` has one pass-through output, and `dataops-cron` has no input.
+
+**Status colors.** Green = ready/ok, yellow = missing config or heuristic fallback, blue = API call in progress or runtime counting, red = error.
 
 ---
 
 ## Component Details
 
-### dataops-cache (Config Node)
+### dataops-in (palette: "cache")
 
-**Role**: Central hub — stores messages, dispatches update events.
+**Role**: Write each `msg.payload` into the cache dictionary at `<specScope>.<specKey>`, keyed by `msg[keyField]` (default `topic`; numbers are stringified). The message passes through unchanged.
 
-**Data structure**: `Map<key, {payload, ts, metadata, previous}>`
+| `storeMode` | Entry stored | Use |
+|---|---|---|
+| `wrapped` (default) | `{ payload, ts, metadata: {_msgid, originalTopic}, previous }` | Raw ingest, used as the `dataops-claude` source. `previous` holds the prior entry. |
+| `flat` | `msg.payload` as-is | Latest-value cache for `dataops-runtime` |
 
-- `key`: String cache key (typically `msg.topic`)
-- `payload`: The full message payload (any JSON-serializable value)
-- `ts`: Timestamp of last update (ms since epoch)
-- `metadata`: Object with `_msgid` and `originalTopic`
-- `previous`: Snapshot of the previous entry (for change detection)
+**Bounds**:
+- `maxEntries` (0 = unbounded): true LRU. Each write deletes and re-inserts the key, so object insertion order equals recency, and the oldest keys are evicted. Integer-like keys are the exception, because JS objects always enumerate them first.
+- `ttl` ms (0 = none): wrapped mode only. A timer running every `min(ttl, 60s)` purges entries whose `ts` is older than `ttl`. In flat mode the node shows a yellow "TTL ignored" status.
 
-**Storage layers**:
-1. **In-memory Map** — primary store, O(1) access, used by all worker nodes at runtime
-2. **Node-RED global context** — debounced sync (500ms), enables sidebar inspection and persistence across restarts
-
-**Event system**: Node.js `EventEmitter` shared per cache instance, keyed by `node.id`. Exact-key subscriptions using `Map<key, Map<subId, callback>>`.
-
-**Lifecycle**:
-- On create: restore from context if in-memory cache is empty (e.g., after restart)
-- On close: final sync to context, reference-counted cleanup of subscriptions and emitter
-- TTL: optional periodic cleanup of expired entries (min 60s between checks)
-- LRU eviction when exceeding `maxEntries` (removes oldest by timestamp)
-
-**HTTP admin endpoints** (available in editor):
-- `POST /dataops-cache/:id/clear` — clear all entries
-- `GET /dataops-cache/:id/stats` — size, keys, subscription counts
-- `GET /dataops-cache/:id/keys` — list of cached keys for autocomplete
-
----
-
-### dataops-in
-
-**Role**: Feed messages into the cache.
-
-**Flow**: `input msg → extract key → cache.setValue(key, payload) → pass-through msg`
-
-- Key extracted from any `msg` property via `RED.util.getMessageProperty` (default: `msg.topic`)
-- Stores the full `msg.payload` as the value (objects, arrays, scalars — anything)
-- Builds metadata from `msg._msgid` and `msg.topic`
-- Passes the message through unchanged
-- Status: green dot (ready), yellow ring (missing key), red ring (error/no cache)
-
----
-
-### dataops-combine
-
-**Role**: Collect narrow normalized records and emit wide flat dictionaries.
-
-**Input**: `msg.payload = {name, type, timestamp, value, quality}` (canonical record shape)
-
-**Internal buffer**: `Map<name, {value, type, timestamp, quality}>`
-
-**Trigger modes**:
-
-| Mode | Behavior |
-|---|---|
-| `event` | Emit on every input — always-current snapshot |
-| `interval` | Emit every N milliseconds, using latest buffered values |
-| `quorum` | Emit when all `expectedNames` have arrived, then clear buffer |
-
-A message with `msg.cmd = 'emit'` forces an emit regardless of mode.
-
-**Output message shape** (output 1):
-```js
-{
-  topic: "dataops/combined",
-  payload: {
-    temperature: 25.5,
-    humidity: 60.2,
-    ts: 1716636002000         // latest timestamp across all records
-  },
-  _names: ["temperature", "humidity"],
-  _trigger: "event"
-}
-```
-
-When `includeQuality` is enabled, quality fields are included as `<name>_q`.
-
-**Key design decisions**:
-- Buffer stores only the latest value per name (not a sliding window)
-- No partial outputs in quorum mode — all expected names must be present
-- The `ts` field name is configurable via `tsField`
-- Output 2 carries malformed input errors (missing `name` field)
-
----
-
-### dataops-split
-
-**Role**: Explode a wide payload into N narrow normalized records.
-
-**Input**: A message with a wide payload object:
-```js
-{ topic: "plant/HWS/Denis", payload: { T: 25.4, H: 60.2, P: 1013, alarmActive: false } }
-```
-
-**Configuration**:
-- `topicFilter` — MQTT-style filter (`+`, `#`); empty matches all topics
-- `fields` — JSON array of `{name, type, path?}`; `path` defaults to `name`
-- `timestampExpr` — JSONata expression; empty falls back to `msg.timestamp` or `Date.now()`
-- `qualityExpr` — JSONata expression; empty falls back to `msg.quality` or `true`
-
-**Output** (output 1): One message per field, shape:
-```js
-{
-  topic: "plant/HWS/Denis/T",
-  payload: { name: "T", type: "number", timestamp: 1716636000000, value: 25.4, quality: true },
-  _split: { from: "plant/HWS/Denis", field: "T" }
-}
-```
-
-**Key design decisions**:
-- Fields are extracted by dot-path into `msg.payload` (not `msg` itself)
-- Missing fields produce `undefined` value (coerced to `null` on type mismatch)
-- Non-matching topics are dropped (or forwarded to output 2 if `passthroughNonMatch`)
-- Type coercion uses the shared `lib/coerce.js` module
-- JSONata expressions are prepared once at construction time
-
----
-
-### dataops-claude-api (Config Node)
-
-**Role**: Store Anthropic API credentials and model settings.
-
-**Properties**: `apiKey` (encrypted password credential), `model`, `baseUrl`, `maxTokens`, `temperature`.
-
-**Used by**: `dataops-claude` nodes.
-
----
-
-### dataops-claude
-
-**Role**: Send cache samples to Claude and harvest per-topic normalization specs.
-
-**Workflow**:
-1. Read all entries from the linked `dataops-cache`
-2. Encode entries as TOON table: `samples[N]{topic,ts,payload}:`
-3. Call the Anthropic Messages API with retry/backoff
-4. Parse the TOON response into a spec dictionary: `{topic: {type, value, timestamp, quality}}`
-5. Optionally merge into Node-RED context (`global` or `flow`) at configured key
-6. Emit one message per topic on output 1
-
-**API call details**:
-- 3 retry attempts with exponential backoff (1s → 2s → 4s, capped at 8s)
-- 120-second timeout per attempt via AbortController
-- Retries on 429 and 5xx status codes
-- Uses `anthropic-version: 2023-06-01` header
-
-**Sampling**: If cache entries exceed `maxSampleRows` (default 250), only the first N are sent. The prompt includes a note about total vs sampled count.
-
-**TOON encoding**: Cache entries are encoded as a minimal tabular format for token efficiency. Each row contains `topic`, `ts` (epoch ms), and `payload` (JSON-encoded for objects/arrays, bare for primitives).
-
-**Response parsing**:
-- Primary: TOON decode (expects `specs[M]{topic,type,value,timestamp,quality}:`)
-- Fallback: JSON parse with markdown fence stripping (handles models that ignore TOON instructions)
-- Diagnostics: detects truncated responses (`stop_reason === 'max_tokens'`), thinking-only responses
-
-**Spec dictionary merge**: When `specKey` is set, the parsed specs are merged into the existing context dictionary (preserving entries for topics not in the current response). Each merged entry gets a `_meta` field with `generated_at`, `model`, and `format`.
-
-**SQLite history**: Every API call is recorded in the `config_history` table: `node_id`, `timestamp`, `cache_size`, `model`, `system_prompt`, `user_prompt`, `response`, `input_tokens`, `output_tokens`, `duration_ms`.
-
-**Default system prompt**: A 204-line prompt instructing Claude to generate JSONata expressions for IIoT payload normalization, with rules for OPC UA Variants, Kepware, and Sparkplug B formats.
+Each message does a read-modify-write of the whole dictionary. There is no debounce.
 
 ---
 
 ### dataops-transform
 
-**Role**: Apply per-topic processing instructions (JSONata expressions) to normalize incoming messages.
+**Role**: Normalize each message using its topic's spec from `<specScope>.<specKey>` (default `dataopsSpecs`).
 
-**Spec dictionary** (read from Node-RED context, typically populated by `dataops-claude`):
 ```js
 {
   "plant/HWS/Denis/temp": {
     type:      "number",
     value:     "payload.value.value",
     timestamp: "$toMillis(payload.sourceTimestamp)",
-    quality:   "payload.statusCode = 0"
+    quality:   "payload.statusCode = 0",
+    _meta:     { generated_at, model, format }    // added by dataops-claude, ignored here
   }
 }
 ```
 
-The topic (dictionary key) IS the canonical `name`. `value`, `timestamp`, and `quality` are JSONata expressions evaluated against the full `msg` object.
+The dictionary key is the canonical `name`. `value`, `timestamp` and `quality` are JSONata expressions evaluated against the whole `msg` (compiled through `lib/jsonata`, so the lenient functions below apply). Missing expressions default to `msg.payload`, now and `true`, and the value is coerced to `type`.
 
-**Processing flow**:
-1. Extract topic from `msg` using configured `keyField` (default: `msg.topic`)
-2. Look up spec in context dictionary
-3. If found: compile/cache JSONata expressions, evaluate against `msg`, coerce value to declared type
-4. If not found: apply fallback mode
+**Compiled cache**: `Map<topic, {sig, value, timestamp, quality}>`, recompiled when `JSON.stringify(spec)` changes. Spec updates take effect without a redeploy.
 
-**Compiled expression cache**: `Map<topic, {sig, value, timestamp, quality}>` — expressions are cached after compilation and only recompiled when the raw spec content changes (tracked via JSON.stringify signature).
-
-**Fallback modes**:
+**Fallback modes** (no spec for the topic):
 
 | Mode | Behavior |
 |---|---|
-| `heuristic` | Walk `payload.value.value` → `payload.value` → `payload.v` → `payload`; infer type; use `Date.now()` for timestamp; quality = `true` |
-| `passthrough` | Forward original message to output 2 |
-| `error` | Raise error to output 2 |
+| `heuristic` (default) | `extractValue(payload)`, infer type, timestamp = numeric `msg.timestamp` or now, quality = `msg.quality` or `true` |
+| `passthrough` | Original message to output 2 |
+| `error` | Error to output 2 |
 
-**Output** (output 1):
-```js
-{
-  payload: { name: "plant/HWS/Denis/temp", type: "number", timestamp: 1716636000000, value: 25.4, quality: true },
-  _spec: "spec"  // or "heuristic"
-}
-```
+Output 1 is the original `msg` with the result in the configured shape (see [Transform Output](#transform-output)) and `_spec` = `"spec"` or `"heuristic"`.
+
+---
+
+### dataops-cron
+
+**Role**: Schedule a trigger with a 6-field cron expression (`sec min hour dom mon dow`). Each field supports `*`, `a`, `a-b`, `a-b/n`, `*/n` and lists. Day-of-week `7` means Sunday. If both day-of-month and day-of-week are restricted, matching either one fires the trigger.
+
+A 250 ms timer fires at most once per wall-clock second, with times anchored to the second boundary. An invalid expression puts a red status on the node and disables it.
+
+Output 1: `{payload (per payloadType), timestamp: ISO, _epoch: ms, _cron, _tick, topic?}`. Output 2: payload-build errors, such as invalid JSON.
+
+---
+
+### dataops-runtime
+
+**Role**: Emit sampled rows while a run flag is active, with the elapsed runtime.
+
+1. `on = isTruthy(entryValue(dict[triggerKey]))`. The trigger key is used verbatim, and wrapped or canonical entries are unwrapped. Truthy values: `true`, non-zero numbers, `"true"`/`"1"`/`"yes"`/`"on"`.
+2. A false → true transition records the start time.
+3. While the flag is on, the node emits once `sampling` seconds have passed since the start, then at most once per `sampling` seconds. `0` means every input.
+4. Row: `{timestamp, runtime: seconds since start, label: entryValue(dict[labelKey]), <alias>: value, ...}`, sent as `msg.payload = [row]` with `_runtime: {runtime, startedAt}`.
+
+Times come from the trigger message. Run state is held in memory and resets on redeploy or when the flag goes off.
+
+---
+
+### dataops-claude-api (Config Node)
+
+| Property | Default | Notes |
+|---|---|---|
+| `apiKey` (credential) | — | Encrypted by Node-RED |
+| `model` | `claude-opus-5-5` | Saved configs keep their saved model |
+| `effort` | model default | `output_config.effort`: low / medium / high / xhigh / max |
+| `maxTokens` | 16384 | Includes thinking |
+| `temperature` | not sent | Only sent when set. Current models reject sampling parameters with a 400. |
+| `fallbacks` | on | Sends `fallbacks: "default"` with beta `server-side-fallback-2026-07-01` so a policy decline is retried server-side. Older configs without the property default to on. |
+| `baseUrl` | Anthropic API | A legacy trailing `/v1` is stripped |
+
+The node exposes `complete({systemPrompt, userPrompt})` and `hasApiKey()`. It creates the SDK client lazily on first use.
+
+**DataOps AI sidebar**: a tab registered by the config node's `.html`. The user describes a pipeline, and the server calls Claude with `FLOW_SYSTEM_PROMPT`, which documents every node's fields and output count. The result is parsed tolerantly (bare or fenced array). Config and tab nodes and nodes without an id or type are dropped, `apiConfig` is set on `dataops-claude` nodes and `z` is removed. The user then imports the flow with `RED.view.importNodes(..., {generateIds: true})`.
+
+| Endpoint | Permission | Purpose |
+|---|---|---|
+| `GET /dataops/claude/configs` | `flows.read` | List deployed config nodes |
+| `POST /dataops/claude/generate-flow` | `flows.write` | `{configId, description}` → `{flow, usage, model}` |
+
+---
+
+### dataops-claude (palette: "claude")
+
+**Role**: Turn cache samples into per-topic specs.
+
+1. Read `<sourceScope>.<sourceKey>`. Wrapped entries contribute `{payload, ts, metadata}`, and bare values are accepted. If the source is empty and there is no custom prompt, the node errors without calling the API.
+2. Encode up to `maxSampleRows` (default 250) as TOON `samples[N]{topic,ts,payload}`.
+3. Build the user prompt, unless a non-empty string in `msg.payload` replaces it.
+4. Call `apiConfig.complete(...)`. API errors and refusals go to output 2 with a readable reason.
+5. Parse TOON `specs[M]{topic,type,value,timestamp,quality,unit,description}`, or fall back to a JSON object. `unit` and `description` are optional and stored for reference only. A parse failure reports truncation or missing answer text.
+6. Merge into `<specScope>.<specKey>`. Topics missing from the response are kept, and each new spec gets `_meta: {generated_at, model, format}`.
+**Default system prompt** (`DEFAULT_SYSTEM_PROMPT`, used when the System Prompt field is empty): Markdown sections Role → How your specs are used → Input → Output → Column rules (one lookup table per column) → Example → Checklist. The worked example is generated with `toon.encodeTable` from `EXAMPLE_SAMPLES` / `EXAMPLE_SPECS`, and a test runs every example spec through a real transform node, so the prompt can't teach a broken expression. The editor fetches the prompt from `GET /dataops/claude/default-prompt` (`flows.read`) for its **Load default** button.
+
+7. Output 1 sends one message per spec: `{topic, payload: spec, _claude: {model, usage, duration_ms, cache_size, stop_reason}}`.
 
 ---
 
 ## Shared Libraries
 
-### lib/toon.js — Token-Oriented Object Notation
+### lib/anthropic.js
 
-Minimal tabular encoder/decoder for efficient LLM I/O.
+Built on the official `@anthropic-ai/sdk`.
 
-**Format**:
-```
-name[N]{col1,col2,...}:
-  <row1>
-  <row2>
-```
+- `createClient({apiKey, baseUrl, timeoutMs = 300000, maxRetries = 2})`. The SDK retries 408/409/429/5xx and connection errors.
+- `complete(client, settings, {systemPrompt, userPrompt})` streams the response (`messages.stream(...).finalMessage()`, or `beta.messages.stream` when fallbacks are on). It throws on `stop_reason: "refusal"` and otherwise returns `{content, text, model, usage, stop_reason, stop_details}`, where `text` joins the text blocks.
+- `buildParams()` adds optional fields only when set. `describeError()` produces readable messages for SDK error classes.
 
-**Cell encoding**: Numbers, booleans, `null` are bare tokens. Strings containing commas, quotes, or whitespace are double-quoted with backslash escapes. Objects and arrays are JSON-stringified into quoted cells.
+### lib/jsonata.js
 
-**Decoding**: Permissive parser — strips markdown fences, ignores surrounding text, case-insensitive column matching.
+`prepare(RED, node, expr)` compiles with `RED.util.prepareJSONataExpression` and binds:
+- `$eval` / `$fromJSON`: tolerant JSON parse. Strings are parsed and anything else passes through. Claude sees object payloads as JSON strings in the TOON samples and often writes `$eval(payload)`.
+- `$toMillis`: accepts a space separator and `+HHMM` offsets, falls back to `Date.parse`, passes numbers through, and returns `undefined` instead of throwing.
 
-**API**: `encodeTable(name, columns, rows)`, `decodeTable(input)`, `rowsToObjects(decoded)`.
+`evaluate()` returns a promise that rejects on evaluation errors.
 
-### lib/coerce.js — Type Coercion
+### lib/values.js, lib/context.js
 
-Shared between `dataops-split` and `dataops-transform`.
+See [Shared Conventions](#shared-conventions). `context.registerKeysEndpoint(RED)` registers `GET /dataops/context/keys?scope=&key=&z=` (`flows.read`) once per admin app. It reaches context through a live node (any node for global scope, a node on flow `z` for flow scope), so the flow must be deployed.
 
-**`coerce(value, type)`**: Returns value reshaped to declared type, or `null` on failure. Supported types with aliases:
-- `number` / `double` / `float` / `real` — parsed via `Number()`, must be finite
-- `integer` / `int` / `long` / `short` — parsed numerically, `Math.trunc` applied
-- `boolean` / `bool` — accepts booleans, 0/1, and strings: true/false, 1/0, yes/no, on/off
-- `string` / `text` / `char` — objects JSON-stringified, primitives via `String()`
-- `object` / `json` — objects pass through, strings JSON-parsed
+### lib/toon.js
 
-**`inferType(value)`**: Returns type tag from runtime value (`boolean`, `integer`, `number`, `string`, `object`, `null`).
+Minimal tabular format: `name[N]{col1,col2,...}:` followed by indented comma rows. Numbers, booleans and `null` are bare. Strings with commas, quotes or whitespace are quoted with backslash escapes. Objects and arrays are JSON-stringified into a quoted cell. The decoder strips one markdown fence, skips text before the header and treats an empty cell as `null`.
 
-### lib/sqlite-store.js — Claude API History
+### lib/coerce.js
 
-Thin wrapper around `better-sqlite3`.
+`coerce(value, type)` returns `null` instead of throwing. It handles number (double/float/real), integer (int/long/short, truncated), boolean (bool; true/false, 1/0, yes/no, on/off), string (text/char; objects are JSON-encoded) and object (json; strings are parsed). Unknown types pass the value through. `inferType(value)` returns the runtime type tag.
 
-**Schema**: `config_history` table with columns: `id`, `node_id`, `timestamp`, `cache_size`, `model`, `system_prompt`, `user_prompt`, `response`, `input_tokens`, `output_tokens`, `duration_ms`. Indexed on `node_id` and `timestamp`.
+---
 
-**Design**: Per-operation connections (open → execute → close) to avoid persistent-connection issues. WAL journal mode for concurrent-reader safety.
+## Editor Code
 
-**API**: `constructor(dbPath)`, `insertRecord(record)`, `getRecords(nodeId, limit)`, `close()`.
+`resources/dataops-ui.js` is served by Node-RED (1.3+) at `resources/node-red-contrib-dataops/dataops-ui.js` and included by `dataops-runtime.html`. `DataOpsUI.fieldPicker(node)` renders the topic/alias picker from `/dataops/context/keys`, keeps saved selections visible before a refresh, and stores `[{topic, alias}]` in the hidden `fields` input.
 
 ---
 
 ## Data Flow Patterns
 
-### AI-assisted normalization (the full pipeline)
+### AI-assisted normalization
 ```
-[sensors] → dataops-in → cache → dataops-claude → context (spec dict)
-                                              ↓
-[messages] → dataops-transform → dataops-combine → [database]
+[sensors] → dataops-in (wrapped, key=rawCache)
+[cron/inject] → dataops-claude (source=rawCache, spec=dataopsSpecs)
+[live msgs] → dataops-transform (spec=dataopsSpecs) → [database]
 ```
 
-1. Upstream sensors feed sample data into the cache
-2. `dataops-claude` sends samples to Claude, harvests per-topic normalization specs
-3. Specs are stored in Node-RED context as a dictionary
-4. Live messages flow through `dataops-transform`, which applies the specs
-5. Normalized records feed into `dataops-combine` for wide-record assembly
+### Batch/run tracking
+```
+[tags incl. run flag] → dataops-transform → dataops-in (flat, key=plant)
+dataops-cron (* * * * * *) → dataops-runtime (trigger=line/1/running, label=line/1/batch, sampling=60)
+```
 
 ### Heuristic-only normalization (no API key)
 ```
-[messages] → dataops-transform (heuristic fallback) → dataops-combine → [database]
+[messages] → dataops-transform (fallback=heuristic) → [database]
 ```
 
-Uses built-in payload-walking heuristics. Works for OPC UA Variants (`payload.value.value`), Kepware (`payload.value`), and Sparkplug B (`payload.v`).
-
-### Direct split (wide → narrow)
+### Merge tags into one object (core join)
 ```
-[wide message source] → dataops-split → [downstream]
+[messages] → dataops-transform (output=value) → join (key/value, count N) → [database]
 ```
-
-Messages already contain all fields. Split extracts each field into its own normalized record.
-
-### Interval-driven combine (time-series snapshot)
-```
-[sensors] → dataops-transform → dataops-combine (trigger: interval) → [database]
-```
-
-Snapshot latest normalized values periodically, regardless of input rate.
-
-### Claude spec refresh (scheduled re-generation)
-```
-[inject (cron)] → dataops-claude → context (updates spec dict)
-```
-
-Periodically re-run Claude to update specs as new data patterns emerge. Does not interrupt the transform pipeline.
 
 ---
 
-## Concurrency Model
+## Concurrency & Memory
 
-- Single-threaded (Node.js event loop) — no locks needed
-- All cache operations are synchronous on the in-memory Map
-- Context sync is asynchronous (debounced setTimeout)
-- Pub/sub dispatch is synchronous (EventEmitter.emit is synchronous)
-- Subscription callbacks fire in order of registration
-- Claude API calls are async with AbortController timeouts
-- JSONata expression evaluation is async (callback-based)
+- Single-threaded event loop. `dataops-in` does a synchronous read-modify-write per message, so many writers to one key are safe with the in-memory context store.
+- JSONata evaluation and Claude calls are async. A slow Claude call does not block transform.
+- Unbounded structures: transform compiled cache (cleared on close) and cache dictionaries when `maxEntries` = 0.
+- In-memory node state is lost on redeploy: cron tick count, runtime run state.
 
-## Memory Model
+---
 
-- **Cache size**: Bounded by `maxEntries` with LRU eviction
-- **TTL**: Optional, checked on a periodic interval (min 60s)
-- **Reference counting**: `sharedInstances` tracks active references; last user cleans up
-- **Context storage**: Cache serialized to global context as a plain object (Map entries → Object)
-- **Combine buffer**: Unbounded `Map<name, record>` cleared on close or quorum emit
-- **Transform expression cache**: Unbounded `Map<topic, compiled>` invalidated on spec change
-- **SQLite**: Per-operation connections, WAL mode, not held open
+## Testing
 
-## Extension Points
+`npm test` runs `node --test` over `test/*.test.js`:
+- `lib.test.js`: pure functions in `lib/`, request building, refusal handling, prompt/field consistency, flow parsing, spec parsing.
+- `nodes.test.js`: every node inside a real Node-RED runtime via `node-red-node-test-helper`. The `dataops-claude` tests stub the config node's `complete()`, so no API key is needed. Every flow in `examples/` must load.
 
-To add a new node type:
-1. Create `nodes/node-name.js` — implement runtime logic
-2. Create `nodes/node-name.html` — register with `category: 'data ops'`, define editor template and help
-3. Register in `package.json` under `node-red.nodes`
-
-To add a new shared library:
-1. Create `lib/module-name.js`
-2. Require it from worker nodes with `require('../lib/module-name')`
-3. Document the API in this file
+Use a unique context key per test (`uniqueKey()`), because in-memory global context persists across loads within a run.

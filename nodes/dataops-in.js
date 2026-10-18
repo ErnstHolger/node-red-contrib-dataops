@@ -1,19 +1,26 @@
 /**
- * dataops-in - Cache-in node: pushes messages into a context dictionary.
+ * dataops-in ("cache") — write each msg.payload into a context dictionary.
  *
- * Extracts a key from the message (default: msg.topic) and stores the full
- * msg.payload at <specScope>.<specKey>[key] as a dictionary of entries:
+ * Extracts a key from the message (default: msg.topic) and stores the payload
+ * at <specScope>.<specKey>[key]. Store modes:
  *
- *     { payload, ts, metadata, previous }
- *
- * so dataops-claude (Source) and dataops-transform can consume it. The message
- * passes through unchanged.
+ *   wrapped — { payload, ts, metadata, previous }   (dataops-claude source)
+ *   flat    — msg.payload as-is                     (latest-value cache for
+ *                                                    dataops-runtime)
  *
  * Optional bounds:
- *   maxEntries — LRU eviction by oldest ts when the dict exceeds the cap (0 = unbounded)
- *   ttl        — entries older than ttl ms are purged on a timer (0 = no expiry)
+ *   maxEntries — LRU eviction when the dict exceeds the cap (0 = unbounded).
+ *                Every write moves the key to the most-recent position.
+ *   ttl        — entries older than ttl ms are purged on a timer (0 = none;
+ *                wrapped mode only — flat entries carry no timestamp).
+ *
+ * The message passes through unchanged on the single output.
  */
+'use strict';
+
 const { sanitizeKey } = require('../lib/ctxkey');
+const { readDict, writeDict } = require('../lib/context');
+const { getMsgKey } = require('../lib/values');
 
 module.exports = function(RED) {
     function DataOpsInNode(config) {
@@ -21,37 +28,23 @@ module.exports = function(RED) {
         const node = this;
 
         node.keyField   = config.keyField || 'topic';
-        // Scope + Spec Key define the context dictionary written to,
-        // consistent with dataops-claude (Source) and dataops-transform.
         node.specScope  = config.specScope || 'global';
         node.specKey    = sanitizeKey(config.specKey);
-        node.maxEntries = parseInt(config.maxEntries) || 0; // 0 = unbounded
-        node.ttl        = parseInt(config.ttl) || 0;        // 0 = no expiry
-        // storeMode: 'wrapped' = { payload, ts, metadata, previous } (for dataops-claude samples);
-        //            'flat'    = store msg.payload as-is (clean cache of normalized records).
-        node.storeMode  = config.storeMode || 'wrapped';
-
-        function store() {
-            return node.context()[node.specScope] || node.context().global;
-        }
-
-        function readDict() {
-            const d = store().get(node.specKey);
-            return (d && typeof d === 'object' && !Array.isArray(d)) ? d : {};
-        }
+        node.maxEntries = Math.max(0, parseInt(config.maxEntries, 10) || 0);
+        node.ttl        = Math.max(0, parseInt(config.ttl, 10) || 0);
+        node.storeMode  = config.storeMode === 'flat' ? 'flat' : 'wrapped';
 
         function setReady() {
-            if (!node.specKey) node.status({ fill: "yellow", shape: "ring", text: "no spec key" });
-            else node.status({ fill: "green", shape: "dot", text: "ready" });
+            if (!node.specKey) node.status({ fill: 'yellow', shape: 'ring', text: 'no spec key' });
+            else if (node.ttl > 0 && node.storeMode === 'flat') node.status({ fill: 'yellow', shape: 'ring', text: 'TTL ignored in flat mode' });
+            else node.status({ fill: 'green', shape: 'dot', text: 'ready' });
         }
         setReady();
 
-        // TTL purge timer
-        let ttlInterval = null;
-        if (node.ttl > 0) {
-            ttlInterval = setInterval(() => {
-                if (!node.specKey) return;
-                const dict = readDict();
+        let ttlTimer = null;
+        if (node.ttl > 0 && node.storeMode === 'wrapped' && node.specKey) {
+            ttlTimer = setInterval(() => {
+                const dict = readDict(node, node.specScope, node.specKey);
                 const now = Date.now();
                 let changed = false;
                 for (const [k, e] of Object.entries(dict)) {
@@ -60,7 +53,7 @@ module.exports = function(RED) {
                         changed = true;
                     }
                 }
-                if (changed) store().set(node.specKey, dict);
+                if (changed) writeDict(node, node.specScope, node.specKey, dict);
             }, Math.min(node.ttl, 60000));
         }
 
@@ -70,74 +63,62 @@ module.exports = function(RED) {
 
             try {
                 if (!node.specKey) {
-                    node.status({ fill: "yellow", shape: "ring", text: "no spec key" });
-                    done(new Error("No Spec Key configured"));
-                    return;
+                    node.status({ fill: 'yellow', shape: 'ring', text: 'no spec key' });
+                    return done(new Error('No Spec Key configured'));
                 }
 
-                const prop = node.keyField.startsWith('msg.') ? node.keyField.substring(4) : node.keyField;
-                const key = RED.util.getMessageProperty(msg, prop);
-
-                if (!key || typeof key !== 'string') {
-                    node.status({ fill: "yellow", shape: "ring", text: "missing key" });
-                    done(new Error(`Key not found at msg.${prop}`));
-                    return;
+                const rawKey = getMsgKey(RED, msg, node.keyField);
+                if (rawKey === undefined || rawKey === null || rawKey === '' || typeof rawKey === 'object') {
+                    node.status({ fill: 'yellow', shape: 'ring', text: 'missing key' });
+                    return done(new Error(`Key not found at msg.${String(node.keyField).replace(/^msg\./, '')}`));
                 }
+                const key = String(rawKey);
 
-                const dict = readDict();
-                const ts = Date.now();
+                const dict = readDict(node, node.specScope, node.specKey);
                 const existing = dict[key];
+                // Delete first so re-inserting moves the key to the end (LRU order).
+                delete dict[key];
 
                 if (node.storeMode === 'flat') {
-                    // Store the payload as-is — a clean cache of normalized records.
                     dict[key] = msg.payload;
                 } else {
+                    const ts = Date.now();
                     const metadata = { _msgid: msg._msgid, originalTopic: msg.topic };
                     dict[key] = {
                         payload: msg.payload,
-                        ts: ts,
-                        metadata: metadata,
-                        previous: existing
+                        ts,
+                        metadata,
+                        previous: existing && typeof existing === 'object'
                             ? { payload: existing.payload, ts: existing.ts, metadata: existing.metadata }
-                            : { payload: msg.payload, ts: ts, metadata: metadata }
+                            : { payload: msg.payload, ts, metadata }
                     };
                 }
 
-                // LRU eviction — remove the oldest entry while over the cap.
-                // Uses entry.ts in wrapped mode; falls back to insertion order in flat
-                // mode (re-inserting an existing key below keeps it "fresh").
+                // LRU eviction: insertion order == recency because of the delete above
+                // (except integer-like keys, which JS objects always enumerate first).
                 if (node.maxEntries > 0) {
-                    let keys = Object.keys(dict);
-                    while (keys.length > node.maxEntries) {
-                        let oldestKey = keys[0], oldestTs = Infinity, haveTs = false;
-                        for (const k of keys) {
-                            const t = dict[k] && typeof dict[k] === 'object' ? dict[k].ts : undefined;
-                            if (typeof t === 'number') { haveTs = true; if (t < oldestTs) { oldestTs = t; oldestKey = k; } }
-                        }
-                        if (!haveTs) oldestKey = keys[0]; // flat mode: oldest inserted
-                        delete dict[oldestKey];
-                        keys = Object.keys(dict);
-                    }
+                    const keys = Object.keys(dict);
+                    for (let i = 0; i < keys.length - node.maxEntries; i++) delete dict[keys[i]];
                 }
 
-                store().set(node.specKey, dict);
+                writeDict(node, node.specScope, node.specKey, dict);
 
                 const displayKey = key.length > 20 ? key.substring(0, 17) + '...' : key;
-                node.status({ fill: "green", shape: "dot", text: displayKey });
+                node.status({ fill: 'green', shape: 'dot', text: displayKey });
 
                 send(msg);
                 done();
             } catch (err) {
-                node.status({ fill: "red", shape: "ring", text: "error" });
+                node.status({ fill: 'red', shape: 'ring', text: 'error' });
                 done(err);
             }
         });
 
         node.on('close', function(done) {
-            if (ttlInterval) { clearInterval(ttlInterval); ttlInterval = null; }
+            if (ttlTimer) { clearInterval(ttlTimer); ttlTimer = null; }
             done();
         });
     }
 
-    RED.nodes.registerType("dataops-in", DataOpsInNode);
+    RED.nodes.registerType('dataops-in', DataOpsInNode);
 };

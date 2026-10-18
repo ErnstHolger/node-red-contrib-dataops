@@ -3,16 +3,27 @@
         category: 'config',
         defaults: {
             name: { value: "" },
-            model: { value: "claude-sonnet-4-6" },
-            baseUrl: { value: "https://api.anthropic.com/v1" },
+            model: { value: "claude-opus-5-5" },
+            baseUrl: { value: "" },
             maxTokens: { value: 16384, validate: RED.validators.number() },
-            temperature: { value: 0.7, validate: RED.validators.number() }
+            effort: { value: "" },
+            temperature: { value: "", validate: function(v) { return v === undefined || v === null || String(v).trim() === '' || !isNaN(Number(v)); } },
+            fallbacks: { value: true }
         },
         credentials: {
             apiKey: { type: "password" }
         },
         label: function() {
             return this.name || "Claude API";
+        },
+        oneditprepare: function() {
+            // Older configs had no fallbacks property: default it on for the Anthropic API only
+            // (same rule as the runtime; third-party gateways may reject the beta parameter).
+            if (this.fallbacks === undefined) {
+                var url = (this.baseUrl || '').trim();
+                var isAnthropic = !url || /^https?:\/\/api\.anthropic\.com(\/|$)/.test(url);
+                $('#node-config-input-fallbacks').prop('checked', isAnthropic);
+            }
         }
     });
 </script>
@@ -25,52 +36,74 @@
     <div class="form-row">
         <label for="node-config-input-apiKey"><i class="fa fa-key"></i> API Key</label>
         <input type="password" id="node-config-input-apiKey" placeholder="sk-ant-...">
-        <div class="form-tips">Your Anthropic API key. Stored securely by Node-RED.</div>
+        <div class="form-tips">Your Anthropic API key. Stored encrypted by Node-RED.</div>
     </div>
     <div class="form-row">
         <label for="node-config-input-model"><i class="fa fa-cube"></i> Model</label>
-        <input type="text" id="node-config-input-model" placeholder="claude-sonnet-4-6">
-        <div class="form-tips">Model ID (e.g., claude-sonnet-4-6, claude-opus-4-7).</div>
+        <input type="text" id="node-config-input-model" placeholder="claude-opus-5-5">
+        <div class="form-tips">Model ID, e.g. <code>claude-opus-5-5</code> (default) or <code>claude-sonnet-5-5</code>.</div>
     </div>
     <div class="form-row">
-        <label for="node-config-input-baseUrl"><i class="fa fa-globe"></i> Base URL</label>
-        <input type="text" id="node-config-input-baseUrl" placeholder="https://api.anthropic.com/v1">
-        <div class="form-tips">API endpoint. Change only for proxies or compatible APIs.</div>
+        <label for="node-config-input-effort"><i class="fa fa-tachometer"></i> Effort</label>
+        <select id="node-config-input-effort" style="width:70%;">
+            <option value="">model default</option>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+            <option value="xhigh">xhigh</option>
+            <option value="max">max</option>
+        </select>
+        <div class="form-tips">Thinking depth vs. token spend. Spec generation usually works well at <code>medium</code>.</div>
     </div>
     <div class="form-row">
         <label for="node-config-input-maxTokens"><i class="fa fa-arrow-up"></i> Max Tokens</label>
         <input type="number" id="node-config-input-maxTokens" placeholder="16384">
-        <div class="form-tips">Maximum output tokens for the response.</div>
+        <div class="form-tips">Output token cap (thinking included). Raise it if responses come back truncated.</div>
     </div>
     <div class="form-row">
         <label for="node-config-input-temperature"><i class="fa fa-thermometer-half"></i> Temperature</label>
-        <input type="number" id="node-config-input-temperature" placeholder="0.7" step="0.1" min="0" max="1">
-        <div class="form-tips">Response randomness (0 = deterministic, 1 = creative).</div>
+        <input type="text" id="node-config-input-temperature" placeholder="(not sent)">
+        <div class="form-tips">Leave empty. Current models (Opus 4.7+, Sonnet 5+) reject sampling parameters; set only for older models.</div>
+    </div>
+    <div class="form-row">
+        <label for="node-config-input-fallbacks" style="width:auto;">
+            <input type="checkbox" id="node-config-input-fallbacks" style="width:auto;vertical-align:top;">
+            Refusal fallback
+        </label>
+        <div class="form-tips">If the model declines a request for policy reasons, retry it on Anthropic's recommended fallback model (server-side). Turn off for proxies that don't support beta features.</div>
+    </div>
+    <div class="form-row">
+        <label for="node-config-input-baseUrl"><i class="fa fa-globe"></i> Base URL</label>
+        <input type="text" id="node-config-input-baseUrl" placeholder="https://api.anthropic.com">
+        <div class="form-tips">Leave empty for the Anthropic API. Set only for a proxy/gateway.</div>
     </div>
 </script>
 
 <script type="text/html" data-help-name="dataops-claude-api">
     <h3>Summary</h3>
-    <p>Configuration node for the Anthropic Claude API. Stores credentials and model settings shared by <code>dataops-claude</code> nodes.</p>
+    <p>Configuration node for the Claude API, shared by <code>dataops-claude</code> nodes and the <b>DataOps AI</b> sidebar.</p>
 
     <h3>Properties</h3>
     <dl class="message-properties">
-        <dt>Name</dt>
-        <dd>Label for this API configuration.</dd>
         <dt>API Key</dt>
         <dd>Anthropic API key (sk-ant-...). Stored encrypted in Node-RED's credential store.</dd>
         <dt>Model</dt>
-        <dd>Claude model ID. Default: <code>claude-sonnet-4-6</code>.</dd>
-        <dt>Base URL</dt>
-        <dd>API endpoint. Change only when using a proxy or compatible API.</dd>
+        <dd>Claude model ID. Default: <code>claude-opus-5-5</code>.</dd>
+        <dt>Effort</dt>
+        <dd>Optional <code>output_config.effort</code>: low, medium, high, xhigh or max. Empty uses the model's default.</dd>
         <dt>Max Tokens</dt>
-        <dd>Maximum tokens in the response. Default: 16384.</dd>
+        <dd>Maximum output tokens, including thinking. Default: 16384.</dd>
         <dt>Temperature</dt>
-        <dd>Controls randomness (0–1). Default: 0.7.</dd>
+        <dd>Optional; only sent when set. Current models return HTTP 400 if it is sent.</dd>
+        <dt>Refusal fallback</dt>
+        <dd>Sends <code>fallbacks: "default"</code> so a policy decline is retried server-side on a fallback model. Default on.</dd>
+        <dt>Base URL</dt>
+        <dd>API endpoint. Empty = <code>https://api.anthropic.com</code>. A trailing <code>/v1</code> is accepted.</dd>
     </dl>
 
     <h3>Notes</h3>
-    <p>The API key must have access to the Messages API. Requests use <code>anthropic-version: 2023-06-01</code>.</p>
+    <p>Requests use the official <code>@anthropic-ai/sdk</code> with streaming, a 5-minute timeout and 2 automatic retries (429, 5xx and connection errors).</p>
+    <p>Existing configs keep their saved model and temperature. If you switch an old config to a current model, clear <i>Temperature</i>.</p>
     <p>This config node also powers the <b>DataOps AI</b> sidebar tab, where you can describe a pipeline in plain English and import a generated flow.</p>
 </script>
 
@@ -94,7 +127,7 @@
     var desc = $('<textarea>', {
         id: 'dataops-ai-desc', rows: 5,
         style: 'width:100%;box-sizing:border-box;font-family:monospace;margin-bottom:6px;',
-        placeholder: 'e.g. Every 10s read sensor topics into the cache, ask Claude for specs, then transform and combine into a wide record.'
+        placeholder: 'e.g. Every 10s read sensor topics into the cache, ask Claude for specs, then normalize live messages with transform.'
     }).appendTo(content);
 
     var btn = $('<button>', { class: 'red-ui-button', style: 'width:100%;margin-bottom:8px;' })

@@ -44,3 +44,7 @@ build/
 # Test output
 test-results/
 playwright-report/
+
+# Local flow snapshots from dev scripts
+*.tmp.json
+*.backup-*.json

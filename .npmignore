@@ -1,5 +1,0 @@
-*.tgz
-.claude/
-.claudeignore
-playwright.config.js
-tests/

@@ -1,0 +1,134 @@
+[
+    {
+        "id": "cr-c",
+        "type": "comment",
+        "name": "Cron schedules",
+        "info": "`dataops-cron` uses 6 fields: `sec min hour day-of-month month day-of-week`.\n\n| Expression | Fires |\n|---|---|\n| `*/5 * * * * *` | every 5 seconds |\n| `0 * * * * *` | at the top of every minute |\n| `0,30 * * * * *` | at seconds 0 and 30 |\n| `0 0 8 * * 1-5` | 08:00 on weekdays |\n| `0 */15 6-18 * * *` | every 15 min from 06:00 to 18:59 |\n\nEvery message carries `msg.timestamp` (ISO) and `msg._epoch` (ms), aligned to the whole second.",
+        "x": 160,
+        "y": 40,
+        "wires": []
+    },
+    {
+        "id": "cr-5s",
+        "type": "dataops-cron",
+        "name": "every 5 s",
+        "cronExpr": "*/5 * * * * *",
+        "outputTopic": "cron/5s",
+        "payloadType": "timestamp",
+        "payloadValue": "",
+        "x": 170,
+        "y": 100,
+        "wires": [
+            [
+                "cr-dbg"
+            ],
+            [
+                "cr-err"
+            ]
+        ]
+    },
+    {
+        "id": "cr-minute",
+        "type": "dataops-cron",
+        "name": "top of minute",
+        "cronExpr": "0 * * * * *",
+        "outputTopic": "cron/minute",
+        "payloadType": "json",
+        "payloadValue": "{\"job\":\"minutely\"}",
+        "x": 170,
+        "y": 140,
+        "wires": [
+            [
+                "cr-dbg"
+            ],
+            [
+                "cr-err"
+            ]
+        ]
+    },
+    {
+        "id": "cr-halfmin",
+        "type": "dataops-cron",
+        "name": "sec 0 and 30",
+        "cronExpr": "0,30 * * * * *",
+        "outputTopic": "cron/halfmin",
+        "payloadType": "str",
+        "payloadValue": "half-minute",
+        "x": 170,
+        "y": 180,
+        "wires": [
+            [
+                "cr-dbg"
+            ],
+            [
+                "cr-err"
+            ]
+        ]
+    },
+    {
+        "id": "cr-weekday",
+        "type": "dataops-cron",
+        "name": "weekdays 08:00",
+        "cronExpr": "0 0 8 * * 1-5",
+        "outputTopic": "cron/weekday",
+        "payloadType": "str",
+        "payloadValue": "shift start",
+        "x": 170,
+        "y": 220,
+        "wires": [
+            [
+                "cr-dbg"
+            ],
+            [
+                "cr-err"
+            ]
+        ]
+    },
+    {
+        "id": "cr-shift",
+        "type": "dataops-cron",
+        "name": "every 15 min, day shift",
+        "cronExpr": "0 */15 6-18 * * *",
+        "outputTopic": "cron/shift",
+        "payloadType": "date",
+        "payloadValue": "",
+        "x": 170,
+        "y": 260,
+        "wires": [
+            [
+                "cr-dbg"
+            ],
+            [
+                "cr-err"
+            ]
+        ]
+    },
+    {
+        "id": "cr-dbg",
+        "type": "debug",
+        "name": "ticks",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 450,
+        "y": 160,
+        "wires": []
+    },
+    {
+        "id": "cr-err",
+        "type": "debug",
+        "name": "errors",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 450,
+        "y": 220,
+        "wires": []
+    }
+]

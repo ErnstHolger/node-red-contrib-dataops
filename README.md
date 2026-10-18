@@ -1,6 +1,6 @@
 # node-red-contrib-dataops
 
-Node-RED nodes for data operations — stream messages into a cache, normalize them with AI assistance, then **split**, **transform**, or **combine** them for database workflows.
+Node-RED nodes for industrial data pipelines. Cache incoming tags in a context dictionary, normalize them with AI-generated or heuristic rules, schedule work to the second, and track machine or batch run times.
 
 ## Installation
 
@@ -8,164 +8,141 @@ Node-RED nodes for data operations — stream messages into a cache, normalize t
 npm install node-red-contrib-dataops
 ```
 
-Or via the Node-RED palette manager: search for `node-red-contrib-dataops`.
+Or use the Node-RED palette manager and search for `node-red-contrib-dataops`.
 
-**Requires Node.js >= 18 and Node-RED >= 2.0.**
+**Requires Node.js >= 18 and Node-RED >= 2.0.** The Claude nodes are optional and need an Anthropic API key. Everything else works without one.
 
-### Optional: Claude AI integration
+> **Upgrading from 1.x?** Version 2.0 removes `dataops-split`, `dataops-combine` and `dataops-table`. See [CHANGELOG.md](CHANGELOG.md) for replacements.
 
-To use the AI-assisted normalization pipeline, install `better-sqlite3` (bundled as a dependency) and configure an Anthropic API key in a `dataops-claude-api` config node.
+## How it fits together
+
+Nodes share data through **context dictionaries**: plain objects in Node-RED `global` or `flow` context, at a key you choose (the *Spec Key*). You can inspect them in the editor's Context sidebar.
+
+- `dataops-in` writes a **cache** dictionary: `{ <topic>: latest value or sample }`.
+- `dataops-claude` reads the cache and writes a **spec** dictionary: `{ <topic>: JSONata rules }`.
+- `dataops-transform` reads specs, and `dataops-runtime` reads the cache.
+
+Keys are sanitized (`my cache` → `my_cache`), so the same name typed into different nodes always lines up.
+
+To merge or explode messages, use the core **join** and **split** nodes. To inspect output, use the core **debug** node.
 
 ## Nodes
 
-### dataops-cache (config node)
-Central message cache and event hub. Stores full message payloads keyed by topic with pub/sub for reactive updates. Supports LRU eviction and optional TTL expiry. Exposes HTTP admin endpoints for inspection and clearing.
+All nodes are in the **data ops** palette category.
 
-### dataops-in
-Pushes incoming messages into the cache. The full `msg.payload` is stored, keyed by the configured field (default: `msg.topic`). Messages pass through unchanged.
+### cache (`dataops-in`)
+Stores `msg.payload` in a context dictionary keyed by `msg.topic` (configurable). The message passes through unchanged.
+- **wrapped** mode stores `{payload, ts, metadata, previous}`. Use it as the sample source for `dataops-claude`.
+- **flat** mode stores the payload as-is, as a clean latest-value cache for `runtime`.
+- Optional **Max Entries** (LRU eviction) and **TTL** (wrapped mode only).
 
-### dataops-combine
-Collects narrow normalized records and emits wide flat dictionaries.
+### transform (`dataops-transform`)
+Normalizes each message with its topic's spec from the spec dictionary:
+```js
+{ "plant/HWS/temp": { type: "number", value: "payload.value.value",
+                      timestamp: "$toMillis(payload.sourceTimestamp)", quality: "payload.statusCode = 0" } }
+```
+- `value`, `timestamp` and `quality` are JSONata expressions evaluated against `msg`. The value is coerced to `type`.
+- `$toMillis` accepts common device timestamp formats, and `$eval`/`$fromJSON` work on parsed objects.
+- Without a spec, the **heuristic** fallback walks `payload.value.value` → `payload.value` → `payload.v` → `payload`. That covers OPC UA, Kepware and Sparkplug B payloads with no setup. The other fallbacks are **passthrough** and **error**.
+- **Output** is configurable:
+  - **record** (default): `msg.payload = {name, type, timestamp, value, quality}`.
+  - **value**: `msg.payload` is the value, with `msg.topic`, `msg.timestamp`, `msg.quality` and `msg.type` set. This form works directly with core `join` (key/value mode).
+- Spec changes take effect on the next message, with no redeploy.
 
-- **Input**: `{name, type, timestamp, value, quality}` (canonical record shape)
-- **Trigger modes**: Event (on every input), Interval (fixed-rate snapshots), Quorum (when all expected names arrive)
-- Optional quality fields as `<name>_q` in output
-- Force-emit via `msg.cmd = 'emit'`
+### cron (`dataops-cron`)
+Fires on a 6-field cron schedule (`sec min hour dom mon dow`), for example `*/10 * * * * *` for every 10 seconds. Core inject can only schedule to the minute. Output times fall exactly on the second, and `msg.timestamp` (ISO) and `msg._epoch` carry the tick time. The payload can be a timestamp, date, string, number, boolean or JSON.
 
-### dataops-split
-Explodes a wide payload into narrow normalized records.
+### runtime (`dataops-runtime`)
+For batch and run tracking. While a run-flag topic in the cache is true, it emits a row at most once per *sampling* seconds. Each row has:
+- `timestamp`
+- `runtime`: seconds since the flag went true
+- `label`: optional, e.g. a batch id
+- the fields you selected
 
-- **Per-field extraction**: JSON array of `{name, type, path}` definitions
-- **MQTT-style topic filter**: `+` (single segment), `#` (multi-level wildcard)
-- **JSONata expressions** for timestamp and quality
-- **Type coercion**: number, integer, string, boolean, object with aliases
-- Outputs canonical `{name, type, timestamp, value, quality}` records
+Trigger and label are topics such as `line/1/running`. Wrapped or normalized entries are unwrapped automatically.
 
-### dataops-claude-api (config node)
-Stores Anthropic API credentials (encrypted) and model settings shared by `dataops-claude` nodes. Supports custom base URLs for proxies and compatible APIs.
+### claude (`dataops-claude`)
+Sends cache samples to Claude and writes the per-topic normalization specs it returns into the spec dictionary for `transform`.
+- **Built-in prompt**: used when the System Prompt box is empty. It's a structured rulebook covering payload styles (OPC UA, Kepware, Sparkplug B, nested and array JSON), timestamps (date strings, epoch s/ms/µs) and quality (OPC UA status codes, OPC DA numeric quality, quality text), with a worked example. **Load default** copies it into the box to read or customize, and **Reset to built-in** clears it.
+- Each spec also gets a `unit` and a short `description` for reference. Transform ignores both.
+- Samples are encoded as TOON, a compact table format, to save tokens. Existing specs for other topics are kept.
+- Uses the official Anthropic SDK with streaming and automatic retries. API errors, refusals and truncated replies are reported on output 2.
+- An empty source dictionary is reported as an error, without an API call.
+- A string in `msg.payload` overrides the generated prompt.
 
-### dataops-claude
-Sends cache samples to Claude for AI-assisted per-topic normalization spec generation.
+### Claude API config (`dataops-claude-api`)
+Holds the Anthropic API key (encrypted) and request settings:
+- **Model**: default `claude-opus-5-5`.
+- **Effort**: optional thinking depth.
+- **Max tokens**: default 16384.
+- **Refusal fallback**: on by default for the Anthropic API; retries a policy decline on a fallback model, server-side.
+- **Base URL**: only needed for a proxy or gateway.
+- **Temperature**: optional and sent only when set. Leave it empty for current models, which reject it.
 
-- Reads all entries from a `dataops-cache`, encodes as TOON for token efficiency
-- Calls the Anthropic Messages API with retry/backoff (3 attempts, 120s timeout)
-- Parses TOON response into a spec dictionary: `{topic: {type, value, timestamp, quality}}`
-- Optionally merges specs into Node-RED context for downstream `dataops-transform` nodes
-- Records all API calls in SQLite history with token usage and duration
-- Emits one message per topic on output 1
-
-### dataops-transform
-Applies per-topic JSONata processing instructions to normalize incoming messages.
-
-- Reads spec dictionary from Node-RED context (populated by `dataops-claude` or manually)
-- Evaluates JSONata expressions for `value`, `timestamp`, `quality` against each message
-- Coerces values to declared types
-- **Heuristic fallback**: walks `payload.value.value` → `payload.value` → `payload.v` → `payload` when no spec exists
-- Caches compiled JSONata expressions for performance
-- Outputs canonical `{name, type, timestamp, value, quality}` records
+**DataOps AI sidebar**: once a config node is deployed, open the *DataOps AI* sidebar tab, describe a pipeline in plain English, and import the generated flow onto the canvas.
 
 ## Quick Start
 
-1. Add a **dataops-cache** config node
-2. Feed data in with **dataops-in** (select the cache in its config)
-3. Choose your pipeline:
+### Heuristic normalization (no API key)
+```
+[mqtt in] → transform (heuristic) → debug
+```
 
-### Pipeline A: Direct split (wide → narrow)
+### AI-assisted normalization
 ```
-[wide msg source] → dataops-split → [downstream]
+[mqtt in] → cache (wrapped, key: rawCache)
+[inject]  → claude (source: rawCache, spec: dataopsSpecs)
+[mqtt in] → transform (spec: dataopsSpecs) → [database]
 ```
-Configure fields to extract, use type coercion for clean output.
 
-### Pipeline B: AI-assisted normalization (any → canonical)
+### Merge normalized tags into one object
 ```
-[sensors] → dataops-in → cache → dataops-claude → context
-                                              ↓
-[messages] → dataops-transform → dataops-combine → [database]
+[mqtt in] → transform (output: value) → join (key/value, count N) → [database]
 ```
-Claude generates per-topic normalization specs; transform applies them to live data; combine assembles wide records.
 
-### Pipeline C: Heuristic transform (no API key needed)
+### Batch runtime tracking
 ```
-[messages] → dataops-transform (heuristic fallback) → dataops-combine → [database]
+[mqtt in] → transform → cache (flat, key: line1)
+cron (* * * * * *) → runtime (trigger: line/1/running, label: line/1/batch, sampling: 60) → [database]
 ```
-Uses built-in payload-walking heuristics — works out of the box for OPC UA, Kepware, and Sparkplug B payloads.
 
 ## Example Flows
 
 | File | Description |
 |---|---|
-| `examples/dataops-example.json` | Basic pipeline: inject → cache → combine → split |
-| `examples/dataops-claude-pipeline.json` | AI pipeline: cache → claude → transform → combine |
-| `examples/dataops-transform-heuristic.json` | Heuristic-only: transform → combine (no API needed) |
-| `examples/dataops-split-pipeline.json` | Direct split: wide messages → narrow records |
+| `examples/dataops-claude-pipeline.json` | AI: sensor injects → wrapped cache → claude generates specs → transform applies them |
+| `examples/dataops-manual-specs.json` | Hand-written spec dictionary (no API key): lenient `$toMillis`, bad OPC UA status → quality false, string → integer, unknown topic → error output |
+| `examples/dataops-runtime-tracking.json` | Simulated line (60 s run / 30 s stop) → cache; cron every 1 s → runtime rows with batch label every 10 s |
+| `examples/dataops-cron-schedules.json` | Five common 6-field cron expressions with different payload types |
+| `examples/dataops-cache-modes.json` | Wrapped (TTL 30 s) vs flat (max 3, LRU) caches side by side, with a button to inspect both |
 
-Import any example via Node-RED's Import menu.
+Import them with **Import → Examples → node-red-contrib-dataops** in the editor, or import a file from `examples/`. Each flow has a comment node explaining what to click and what to look for.
 
-## Canonical Record Shape
-
-All pipeline nodes share a common record shape that flows from split/transform through combine:
-
-```js
-{
-  name:      "plant/HWS/Denis/temperature",
-  type:      "number",
-  timestamp: 1716636000000,
-  value:     25.4,
-  quality:   true
-}
-```
-
-This is the narrow (normalized) form. The combine node assembles these into wide flat dictionaries.
+**Tip:** heuristic mode infers each value's type separately, so a float reading of `1013.0` comes out as `integer`. When downstream types must stay stable (such as database columns), declare the types in a spec dictionary.
 
 ## Development
 
 ```bash
-npm run deploy        # npm link to Node-RED
-npm run deploy:patch  # bump patch + link
-npm run deploy:minor  # bump minor + link
-npm run deploy:major  # bump major + link
-npm test              # run Playwright tests
+npm run deploy            # npm link into Node-RED
+npm run deploy:patch      # bump patch + link
+npm test                  # unit + node tests (node:test, no Node-RED instance or API key needed)
+npm run examples:install  # add the examples as disabled tabs in the Node-RED at :1880
 ```
 
-After code changes, restart Node-RED to pick up changes.
+Restart Node-RED after code changes. See [ARCHITECTURE.md](ARCHITECTURE.md) for internals.
 
 ### Publishing
 
-```bash
-npm run publish:dry    # test publish (no changes)
-npm run publish:patch  # bump patch + publish
-npm run publish:minor  # bump minor + publish
-npm run publish:major  # bump major + publish
-```
+1. Bump `version` in `package.json` and commit.
+2. Push a matching tag: `git tag v2.1.0 && git push origin v2.1.0`.
 
-After publish, resubmit at [flows.nodered.org/add/node](https://flows.nodered.org/add/node).
+`.github/workflows/publish.yml` then runs the tests, checks the tag matches `package.json`, and publishes to npm through **trusted publishing** (no token, no 2FA prompt). The dist-tag follows the version: `-beta` → `beta`, `-rc` → `next`, otherwise `latest`. A version that's already on npm is skipped.
 
-### Adding New Nodes
+One-time setup on npmjs.com: package **Settings → Trusted Publisher → GitHub Actions**, repository `ErnstHolger/node-red-contrib-dataops`, workflow `publish.yml`.
 
-1. Create `nodes/node-name.js` (runtime logic)
-2. Create `nodes/node-name.html` (editor UI + help)
-3. Register in `package.json` under `node-red.nodes`
-4. Run `npm run deploy` and restart Node-RED
-
-## Project Structure
-
-```
-nodes/
-  dataops-cache.js/.html      - Config node: central cache + event hub
-  dataops-in.js/.html         - Push messages to cache
-  dataops-combine.js/.html    - Buffer narrow records, emit wide flat dicts
-  dataops-split.js/.html      - Explode wide payloads into narrow records
-  dataops-claude-api.js/.html - Config node: Anthropic API credentials
-  dataops-claude.js/.html     - AI-assisted spec generation from cache
-  dataops-transform.js/.html  - Apply per-topic JSONata specs to messages
-lib/
-  toon.js                     - Token-Oriented Object Notation
-  coerce.js                   - Shared type coercion
-  sqlite-store.js             - Claude API call history
-examples/
-  *.json                      - Importable demo flows
-```
+After a release, refresh the Flow Library entry at [flows.nodered.org/add/node](https://flows.nodered.org/add/node).
 
 ## License
 
-MIT License — see [LICENSE](LICENSE)
+MIT, see [LICENSE](LICENSE)

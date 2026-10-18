@@ -13,11 +13,13 @@
  *
  * Each field supports:  *  |  a  |  a-b  |  a-b/n  |  *​/n  |  a,b,c (lists/ranges combined)
  *
- * Output (output 1): { topic, payload, _cron, _tick }  where payload type is configurable
- *   (timestamp / str / num / bool / json / date — like the core inject node).
+ * Output (output 1): { payload, timestamp (ISO), _epoch (ms), _cron, _tick, topic? }
+ *   payload type is configurable (timestamp / date / str / num / bool / json —
+ *   like the core inject node).
  *
- * Evaluation: a 1-second tick checks the current local time against the parsed
- * expression. When all six fields match the current second, the node emits.
+ * Evaluation: a 250 ms timer checks local time against the parsed expression and
+ * fires at most once per wall-clock second, anchored to the second boundary.
+ * Output 2 carries payload-build errors.
  */
 'use strict';
 
@@ -156,6 +158,7 @@ module.exports = function(RED) {
             } catch (err) {
                 node.status({ fill: 'red', shape: 'ring', text: 'payload error' });
                 node.error(`[dataops-cron] ${err.message}`);
+                node.send([null, { payload: { error: err.message }, _error: true, _cron: node.cronExpr }]);
                 return;
             }
 
@@ -168,11 +171,7 @@ module.exports = function(RED) {
             };
             if (node.outputTopic) msg.topic = node.outputTopic;
 
-            try {
-                node.send([msg, null]);
-            } catch (err) {
-                node.send([null, { payload: { error: err.message }, _error: true }]);
-            }
+            node.send([msg, null]);
 
             const t = now.toTimeString().slice(0, 8);
             node.status({ fill: 'green', shape: 'dot', text: `fired ${t} (#${tickCount})` });

@@ -1,150 +1,104 @@
 /**
- * dataops-runtime — Build a sampled data table from a context dictionary with trigger and runtime tracking.
+ * dataops-runtime — Sampled rows with runtime tracking while a trigger tag is active.
  *
- * On any incoming message, reads the dictionary at <specScope>.<specKey> and checks if:
- * 1. dict[triggerKey] is truthy
- * 2. (now >= last_true_time + sampling_seconds)
+ * On any incoming message (e.g. from dataops-cron), reads the dictionary at
+ * <specScope>.<specKey> (written by dataops-in, either store mode):
  *
- * If both conditions are met, emits a row with:
- * - timestamp: trigger time (ISO or epoch)
- * - runtime: seconds elapsed since last true transition
- * - label: value from dict[labelKey]
- * - other fields: selected data fields from the dictionary
+ *   1. trigger = isTruthy(value of dict[triggerKey])
+ *   2. on a false→true transition, the rising-edge time is recorded
+ *   3. while true, emit a row once `sampling` seconds have passed since the
+ *      rising edge, then at most once per `sampling` seconds
+ *      (sampling = 0 → every input)
  *
- * Pass-through trigger: fires on every input. 2 outputs [table, error].
+ * Row: { timestamp, runtime: <seconds since rising edge>, label: <dict[labelKey]>, <alias>: value, ... }
+ * sent as msg.payload = [row] with msg._runtime = { runtime, startedAt }.
+ *
+ * Trigger/label keys are dictionary entry keys (topics) and are used verbatim.
+ * Timestamps come from the trigger message (msg._epoch / msg.timestamp) when present.
+ * Edge state is held in memory and resets on redeploy.
+ *
+ * 2 outputs [row, error].
  */
 'use strict';
 
 const { sanitizeKey } = require('../lib/ctxkey');
-const { inferType } = require('../lib/coerce');
+const { readDict, registerKeysEndpoint } = require('../lib/context');
+const { parseFields, entryValue, isTruthy, triggerDate, formatTs } = require('../lib/values');
 
 module.exports = function(RED) {
-
-    function parseFields(fieldsRaw, legacyKeys) {
-        let arr = fieldsRaw;
-        if (typeof arr === 'string' && arr.trim()) {
-            try { arr = JSON.parse(arr); } catch (_) { arr = null; }
-        }
-        if (Array.isArray(arr)) {
-            return arr
-                .filter(f => f && (typeof f === 'object') && f.topic)
-                .map(f => ({ topic: String(f.topic), alias: f.alias ? String(f.alias) : String(f.topic) }));
-        }
-        return [];
-    }
-
-    function extractValue(payload) {
-        if (payload === null || payload === undefined) return null;
-        if (typeof payload !== 'object') return payload;
-        if (payload.value && typeof payload.value === 'object' && 'value' in payload.value) {
-            return payload.value.value;
-        }
-        if ('value' in payload) return payload.value;
-        if ('v' in payload) return payload.v;
-        return payload;
-    }
-
-    function isTruthy(val) {
-        if (typeof val === 'boolean') return val;
-        if (typeof val === 'number') return val !== 0;
-        if (typeof val === 'string') return val.toLowerCase() === 'true' || val === '1';
-        return !!val;
-    }
 
     function DataOpsRuntimeNode(config) {
         RED.nodes.createNode(this, config);
         const node = this;
 
-        node.specScope       = config.specScope || 'global';
-        node.specKey         = sanitizeKey(config.specKey);
-        node.triggerKey      = sanitizeKey(config.triggerKey);
-        node.labelKey        = sanitizeKey(config.labelKey);
-        node.fields          = parseFields(config.fields, config.keys);
-        node.sampling        = Math.max(0, Number(config.sampling) || 0);
-        node.tsFormat        = config.tsFormat || 'iso';
-        node.outputTopic     = config.outputTopic || '';
+        node.specScope   = config.specScope || 'global';
+        node.specKey     = sanitizeKey(config.specKey);
+        node.triggerKey  = (config.triggerKey || '').trim();
+        node.labelKey    = (config.labelKey || '').trim();
+        node.fields      = parseFields(config.fields, config.keys);
+        node.sampling    = Math.max(0, Number(config.sampling) || 0);
+        node.tsFormat    = config.tsFormat === 'epoch' ? 'epoch' : 'iso';
+        node.outputTopic = config.outputTopic || '';
 
-        let lastTrueTime = null;
-        let lastTriggerState = false;
+        let risingEdge = null; // Date of the last false→true transition
+        let lastEmit = null;   // Date of the last emitted row in this run
+        let active = false;
 
-        function status() {
-            if (!node.specKey) { node.status({ fill: 'yellow', shape: 'ring', text: 'no spec key' }); return; }
-            if (!node.triggerKey) { node.status({ fill: 'yellow', shape: 'ring', text: 'no trigger key' }); return; }
-            if (node.fields.length === 0) { node.status({ fill: 'yellow', shape: 'ring', text: 'no fields' }); return; }
-            node.status({ fill: 'green', shape: 'dot', text: `${node.fields.length} fields, ${node.sampling}s sample` });
+        function setReady() {
+            if (!node.specKey) node.status({ fill: 'yellow', shape: 'ring', text: 'no spec key' });
+            else if (!node.triggerKey) node.status({ fill: 'yellow', shape: 'ring', text: 'no trigger key' });
+            else node.status({ fill: 'green', shape: 'ring', text: `idle (${node.fields.length} fields, ${node.sampling}s)` });
         }
-        status();
-
-        function readDict() {
-            const ctx = node.context()[node.specScope] || node.context().global;
-            const d = ctx.get(node.specKey);
-            return (d && typeof d === 'object' && !Array.isArray(d)) ? d : {};
-        }
+        setReady();
 
         node.on('input', function(msg, send, done) {
             send = send || function() { node.send.apply(node, arguments); };
             done = done || function(err) { if (err) node.error(err, msg); };
 
             try {
-                if (!node.specKey) throw new Error('No Spec Key configured');
+                if (!node.specKey)    throw new Error('No Spec Key configured');
                 if (!node.triggerKey) throw new Error('No Trigger Key configured');
-                if (node.fields.length === 0) throw new Error('No fields configured');
 
-                const dict = readDict();
-                const now = new Date();
-                const triggerValue = dict[node.triggerKey];
-                const currentState = isTruthy(triggerValue);
+                const dict = readDict(node, node.specScope, node.specKey);
+                const now = triggerDate(msg);
+                const on = isTruthy(entryValue(dict[node.triggerKey]));
 
-                // Detect false-to-true transition
-                if (currentState && !lastTriggerState) {
-                    lastTrueTime = now;
+                if (!on) {
+                    if (active) setReady();
+                    active = false;
+                    risingEdge = null;
+                    lastEmit = null;
+                    return done();
                 }
-                lastTriggerState = currentState;
-
-                // Check if we should emit: trigger is true AND sampling interval has passed
-                let shouldEmit = false;
-                if (currentState && lastTrueTime !== null) {
-                    const elapsedMs = now.getTime() - lastTrueTime.getTime();
-                    const elapsedSec = elapsedMs / 1000;
-                    shouldEmit = elapsedSec >= node.sampling;
+                if (!active) {
+                    active = true;
+                    risingEdge = now;
+                    lastEmit = null;
                 }
 
-                if (!shouldEmit) {
-                    send([null, null]);
-                    done();
-                    return;
+                const since = (lastEmit || risingEdge).getTime();
+                if (now.getTime() - since < node.sampling * 1000) {
+                    node.status({ fill: 'blue', shape: 'dot', text: `running ${Math.round((now - risingEdge) / 1000)}s` });
+                    return done();
                 }
+                lastEmit = now;
 
-                // Build the row with timestamp, runtime, label, and data fields
-                const runtimeSec = (now.getTime() - lastTrueTime.getTime()) / 1000;
-                const ts = node.tsFormat === 'epoch' ? now.getTime() : now.toISOString();
-                const labelValue = extractValue(dict[node.labelKey]);
-
+                const runtime = (now.getTime() - risingEdge.getTime()) / 1000;
                 const row = {
-                    timestamp: ts,
-                    runtime: runtimeSec,
-                    label: labelValue
+                    timestamp: formatTs(now, node.tsFormat),
+                    runtime,
+                    label: node.labelKey ? entryValue(dict[node.labelKey]) : null
                 };
-
-                // Add the configured fields
-                node.fields.forEach(f => {
-                    const entry = dict[f.topic];
-                    let value = null;
-                    if (entry !== undefined && entry !== null) {
-                        const src = (entry && typeof entry === 'object' && 'payload' in entry) ? entry.payload : entry;
-                        value = extractValue(src);
-                    }
-                    row[f.alias || f.topic] = value;
-                });
+                for (const f of node.fields) row[f.alias] = entryValue(dict[f.topic]);
 
                 const outMsg = Object.assign({}, msg, {
                     payload: [row],
-                    _runtime: { runtime: runtimeSec, lastTrueTime: lastTrueTime.toISOString() }
+                    _runtime: { runtime, startedAt: risingEdge.toISOString() }
                 });
                 if (node.outputTopic) outMsg.topic = node.outputTopic;
 
                 send([outMsg, null]);
-                node.status({ fill: 'green', shape: 'dot', text: `emitted @ ${now.toTimeString().slice(0, 8)}` });
+                node.status({ fill: 'green', shape: 'dot', text: `emitted @ ${now.toTimeString().slice(0, 8)} (${Math.round(runtime)}s)` });
                 done();
             } catch (err) {
                 node.status({ fill: 'red', shape: 'ring', text: 'error' });
@@ -152,43 +106,8 @@ module.exports = function(RED) {
                 done(err);
             }
         });
-
-        node.on('close', function(done) { done(); });
     }
 
     RED.nodes.registerType('dataops-runtime', DataOpsRuntimeNode);
-
-    // ---- Picker endpoint: list the top-level keys of <scope>.<specKey> ----
-    RED.httpAdmin.get('/dataops/runtime/keys',
-        RED.auth.needsPermission('flows.read'),
-        function(req, res) {
-            const scope = req.query.scope === 'flow' ? 'flow' : 'global';
-            const key = sanitizeKey(req.query.key);
-            const z = req.query.z;
-            if (!key) return res.json({ keys: [] });
-
-            try {
-                let ctx;
-                if (scope === 'global') {
-                    let anyNode = null;
-                    RED.nodes.eachNode(function(n) { if (!anyNode && n.z) anyNode = RED.nodes.getNode(n.id); });
-                    ctx = anyNode ? anyNode.context().global : null;
-                } else {
-                    let flowNode = null;
-                    RED.nodes.eachNode(function(n) {
-                        if (!flowNode && n.z === z) { const ln = RED.nodes.getNode(n.id); if (ln) flowNode = ln; }
-                    });
-                    ctx = flowNode ? flowNode.context().flow : null;
-                }
-                if (!ctx) return res.json({ keys: [], note: 'context not available (deploy the flow and ensure data has arrived)' });
-
-                const dict = ctx.get(key);
-                if (!dict || typeof dict !== 'object' || Array.isArray(dict)) {
-                    return res.json({ keys: [], note: 'no dictionary found at this scope/key yet' });
-                }
-                res.json({ keys: Object.keys(dict) });
-            } catch (err) {
-                res.status(500).json({ error: err.message });
-            }
-        });
+    registerKeysEndpoint(RED);
 };

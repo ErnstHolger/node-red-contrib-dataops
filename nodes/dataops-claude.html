@@ -18,11 +18,33 @@
         },
         inputs: 1,
         outputs: 2,
-        outputLabels: ["result", "error"],
+        outputLabels: ["specs", "error"],
         icon: "font-awesome/fa-commenting",
         label: function() { return this.name || "claude"; },
         labelStyle: function() { return (this.name ? "node_label_italic" : "") + " dataops-white-text"; },
-        paletteLabel: "claude"
+        paletteLabel: "claude",
+        oneditprepare: function() {
+            var box = $('#node-input-systemPrompt');
+            var status = $('#dataops-prompt-status');
+            function showMode() {
+                status.text(box.val().trim()
+                    ? 'Custom prompt: used instead of the built-in one.'
+                    : 'Empty: the built-in prompt is used (and updated with the package).');
+            }
+            $('#dataops-prompt-load').on('click', function() {
+                if (box.val().trim() && !confirm('Replace the current prompt with the built-in default?')) return;
+                $.getJSON('dataops/claude/default-prompt').done(function(data) {
+                    box.val(data.prompt).trigger('change');
+                    showMode();
+                }).fail(function() { status.text('Could not load the default prompt (is the node deployed?).'); });
+            });
+            $('#dataops-prompt-reset').on('click', function() {
+                box.val('').trigger('change');
+                showMode();
+            });
+            box.on('input', showMode);
+            showMode();
+        }
     });
 </script>
 
@@ -38,9 +60,14 @@
     </div>
     <div class="form-row">
         <label for="node-input-systemPrompt" style="align-self:flex-start;padding-top:8px;"><i class="fa fa-pencil"></i> System Prompt</label>
-        <textarea id="node-input-systemPrompt" rows="6" style="width:100%;box-sizing:border-box;font-family:monospace;"
-            placeholder="Leave empty to use the built-in IIoT normalization prompt."></textarea>
-        <div class="form-tips">System prompt that sets Claude's role. Leave empty for no system prompt.</div>
+        <textarea id="node-input-systemPrompt" rows="10" style="width:100%;box-sizing:border-box;font-family:monospace;"
+            placeholder="(empty: using the built-in normalization prompt)"></textarea>
+        <div style="margin-top:4px;">
+            <button type="button" id="dataops-prompt-load" class="red-ui-button red-ui-button-small"><i class="fa fa-download"></i> Load default</button>
+            <button type="button" id="dataops-prompt-reset" class="red-ui-button red-ui-button-small"><i class="fa fa-undo"></i> Reset to built-in</button>
+            <span id="dataops-prompt-status" style="margin-left:6px;font-size:0.85em;color:#777;"></span>
+        </div>
+        <div class="form-tips">Leave empty to use the built-in prompt, which turns the cache dictionary into specs for <code>dataops-transform</code>. Use <b>Load default</b> to read or customize it.</div>
     </div>
 
     <div class="form-row" style="margin-bottom:0;">
@@ -91,7 +118,9 @@
         <dt>Claude API</dt>
         <dd>The <code>dataops-claude-api</code> config node with API credentials.</dd>
         <dt>System Prompt</dt>
-        <dd>Sets Claude's role/behavior. Optional. Shown as <code>system</code> in the API call.</dd>
+        <dd>Empty (default) uses the built-in prompt, which teaches Claude to write one spec per topic for <code>dataops-transform</code>.
+        It covers OPC UA, Kepware, Sparkplug B and nested payloads; epoch seconds, milliseconds and microseconds; date strings; and OPC UA/DA status codes and quality text.
+        <b>Load default</b> copies it into the box to customize; a non-empty box replaces it.</dd>
         <dt>Source (Spec Scope + Key)</dt>
         <dd>Context location of the cache samples to analyze — <code>&lt;scope&gt;.&lt;key&gt;</code>. This is the dictionary <code>dataops-in</code> writes to context, shaped <code>{ topic: { payload, ts, metadata } }</code>. Use the same Scope &amp; Spec Key as the <code>dataops-in</code> node.</dd>
         <dt>Destination (Spec Scope + Key)</dt>
@@ -103,11 +132,16 @@
     <h3>Input</h3>
     <p>The node triggers on any incoming message. If <code>msg.payload</code> is a string, it is used as the complete user message sent to Claude (overriding the default prompt). Otherwise, a default prompt is generated that encodes the source samples as TOON and asks Claude to produce per-topic specs.</p>
 
+    <h3>Spec dictionary</h3>
+    <p>Each spec is merged into the Destination dictionary under its topic and gets <code>_meta: {generated_at, model, format}</code>. Specs for topics not in the answer are kept.
+    <code>unit</code> and <code>description</code> are stored for reference only; <code>dataops-transform</code> uses <code>type</code>, <code>value</code>, <code>timestamp</code> and <code>quality</code>.</p>
+
     <h3>Outputs</h3>
     <dl class="message-properties">
-        <dt>Output 1 (result)</dt>
-        <dd><code>msg.payload</code> — Claude's response content (array of content blocks).<br>
-        <code>msg._claude</code> — Metadata: model, usage (tokens), duration_ms, cache_size, stop_reason.</dd>
+        <dt>Output 1 (specs)</dt>
+        <dd>One message per topic: <code>msg.topic</code> = the topic, <code>msg.payload</code> = its spec
+        <code>{type, value, timestamp, quality, unit?, description?}</code>.<br>
+        <code>msg._claude</code>: model, usage (tokens), duration_ms, cache_size, stop_reason.</dd>
         <dt>Output 2 (error)</dt>
         <dd><code>msg.payload.error</code> — Error message if the API call or processing fails.<br>
         <code>msg._error</code> — Set to true.</dd>

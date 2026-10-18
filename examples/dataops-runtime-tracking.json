@@ -1,0 +1,160 @@
+[
+    {
+        "id": "rt-c",
+        "type": "comment",
+        "name": "Runtime / batch tracking",
+        "info": "A simulated line runs for 60 s and then stops for 30 s. Tags are normalized and cached flat under `line1`.\n\nThe runtime node is ticked every second by cron. While `line/1/running` is true, it emits one row every 10 s with:\n- `runtime`: seconds since the line started\n- `label`: the batch id\n- `speed` and `scrap`\n\nWhen the line stops, the run resets. Trigger and label keys are topics, used verbatim.",
+        "x": 160,
+        "y": 40,
+        "wires": []
+    },
+    {
+        "id": "rt-tick",
+        "type": "inject",
+        "name": "every 1 s",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "1",
+        "crontab": "",
+        "once": true,
+        "onceDelay": 0.5,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 130,
+        "y": 100,
+        "wires": [
+            [
+                "rt-sim"
+            ]
+        ]
+    },
+    {
+        "id": "rt-sim",
+        "type": "function",
+        "name": "simulate line 1",
+        "func": "// Line 1 runs for 60 s, stops for 30 s, repeat. A new batch id starts with each run.\nconst t = Date.now();\nconst cycle = Math.floor(t / 90000);\nconst running = (t % 90000) < 60000;\nreturn [[\n    { topic: \"line/1/running\", payload: running },\n    { topic: \"line/1/batch\",   payload: \"B-\" + (1000 + cycle % 1000) },\n    { topic: \"line/1/speed\",   payload: running ? +(120 + Math.random() * 10).toFixed(1) : 0 },\n    { topic: \"line/1/scrap\",   payload: running ? Math.floor(Math.random() * 3) : 0 }\n]];",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 320,
+        "y": 100,
+        "wires": [
+            [
+                "rt-transform"
+            ]
+        ]
+    },
+    {
+        "id": "rt-transform",
+        "type": "dataops-transform",
+        "name": "normalize",
+        "specScope": "global",
+        "specKey": "dataopsSpecs",
+        "keyField": "topic",
+        "fallbackMode": "heuristic",
+        "x": 520,
+        "y": 100,
+        "wires": [
+            [
+                "rt-cache"
+            ],
+            []
+        ]
+    },
+    {
+        "id": "rt-cache",
+        "type": "dataops-in",
+        "name": "line1 cache",
+        "specScope": "global",
+        "specKey": "line1",
+        "keyField": "topic",
+        "storeMode": "flat",
+        "maxEntries": 0,
+        "ttl": 0,
+        "x": 720,
+        "y": 100,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "rt-cron",
+        "type": "dataops-cron",
+        "name": "every 1 s",
+        "cronExpr": "* * * * * *",
+        "outputTopic": "",
+        "payloadType": "timestamp",
+        "payloadValue": "",
+        "x": 140,
+        "y": 200,
+        "wires": [
+            [
+                "rt-runtime"
+            ],
+            []
+        ]
+    },
+    {
+        "id": "rt-runtime",
+        "type": "dataops-runtime",
+        "name": "line 1 runtime",
+        "specScope": "global",
+        "specKey": "line1",
+        "triggerKey": "line/1/running",
+        "labelKey": "line/1/batch",
+        "sampling": "10",
+        "fields": "[{\"topic\":\"line/1/speed\",\"alias\":\"speed\"},{\"topic\":\"line/1/scrap\",\"alias\":\"scrap\"}]",
+        "keys": "",
+        "tsFormat": "iso",
+        "outputTopic": "line1_runtime",
+        "x": 350,
+        "y": 200,
+        "wires": [
+            [
+                "rt-dbg"
+            ],
+            [
+                "rt-err"
+            ]
+        ]
+    },
+    {
+        "id": "rt-dbg",
+        "type": "debug",
+        "name": "runtime rows",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "x": 570,
+        "y": 180,
+        "wires": []
+    },
+    {
+        "id": "rt-err",
+        "type": "debug",
+        "name": "errors",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 550,
+        "y": 240,
+        "wires": []
+    }
+]
