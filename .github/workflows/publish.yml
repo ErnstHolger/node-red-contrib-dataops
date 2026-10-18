@@ -23,9 +23,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '24'
           cache: npm
@@ -37,15 +37,15 @@ jobs:
         run: npm test
 
       - name: Check package contents
-        run: npm publish --dry-run
+        run: npm pack --dry-run   # publish --dry-run fails on npm 11 once the version exists
 
   publish:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '24'   # ships npm 11, which supports trusted publishing
           registry-url: 'https://registry.npmjs.org'
